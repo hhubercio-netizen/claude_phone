@@ -1,0 +1,11 @@
+{
+  "name": "claude-phone-monorepo",
+  "private": true,
+  "workspaces": ["web"],
+  "scripts": {
+    "dev:web": "npm -w web run dev",
+    "build:web": "npm -w web run build",
+    "lint:web": "npm -w web run lint",
+    "test:web": "npm -w web run test"
+  }
+}
