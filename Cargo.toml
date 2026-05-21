@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/claude-phone-shared",
+    "crates/claude-phone-wrapper",
+    "crates/claude-phone-pair",
+    "crates/claude-phone-gateway",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.83"
+license = "MIT"
+repository = "https://github.com/USER/claude-phone"
+
+[workspace.dependencies]
+# async runtime
+tokio = { version = "1.42", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+futures = "0.3"
+
+# HTTP / WS
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "compression-gzip", "fs", "trace"] }
+hyper = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# PTY
+portable-pty = "0.8"
+
+# crypto / random
+rand = "0.8"
+base64 = "0.22"
+
+# utils
+clap = { version = "4", features = ["derive", "env"] }
+qrcode = "0.14"
+dashmap = "6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+anyhow = "1"
+
+# testing
+tokio-test = "0.4"

@@ -1,0 +1,17 @@
+[package]
+name = "claude-phone-gateway"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "claude-phone-gateway"
+path = "src/main.rs"
+
+[dependencies]
+claude-phone-shared = { path = "../claude-phone-shared" }
+tokio = { workspace = true }
+axum = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }

@@ -1,0 +1,16 @@
+[package]
+name = "claude-phone-wrapper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "claude-phone"
+path = "src/main.rs"
+
+[dependencies]
+claude-phone-shared = { path = "../claude-phone-shared" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
