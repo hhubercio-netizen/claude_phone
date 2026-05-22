@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { ActionBar } from '../components/ActionBar/ActionBar';
 import { Terminal } from '../components/Terminal/Terminal';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useSessionStore } from '../store/session';
@@ -77,6 +78,7 @@ export function SessionPage() {
           writeHandle={(w) => (writeRef.current = w)}
         />
       </main>
+      <ActionBar onKey={handleInput} />
     </div>
   );
 }

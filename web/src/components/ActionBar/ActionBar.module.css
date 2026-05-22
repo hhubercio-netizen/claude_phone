@@ -1,0 +1,34 @@
+.bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--cl-panel-bg);
+  border-top: 1px solid var(--cl-panel-border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  /* Don't shrink below the row's natural height */
+  flex: 0 0 auto;
+}
+
+.bar::-webkit-scrollbar { display: none; }
+
+.btn {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--cl-input-bg);
+  border: 1px solid var(--cl-panel-border);
+  color: var(--cl-fg);
+  font-family: inherit;
+  font-size: 14px;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.btn:active {
+  background: var(--cl-accent);
+  color: var(--cl-bg);
+}
