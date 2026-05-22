@@ -1,0 +1,11 @@
+{
+  "name": "Claude Phone",
+  "short_name": "Claude Phone",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
