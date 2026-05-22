@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.gateway
+    container_name: claude-phone-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./gateway.toml:/etc/claude-phone/gateway.toml:ro
+    environment:
+      - RUST_LOG=info,claude_phone_gateway=debug
+
+  caddy:
+    image: caddy:2
+    container_name: claude-phone-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ./certs:/etc/caddy:ro  # cert.pem, key.pem (Cloudflare Origin Cert)
+    depends_on:
+      - gateway
+
+volumes:
+  caddy_data:
+  caddy_config:

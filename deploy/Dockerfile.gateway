@@ -1,0 +1,32 @@
+# Build stage — Rust
+FROM rust:1.87-bookworm AS builder
+WORKDIR /src
+
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+
+RUN cargo build --release -p claude-phone-gateway
+
+# Frontend build
+FROM node:20-bookworm AS web-builder
+WORKDIR /src
+COPY package.json package-lock.json ./
+COPY web/package.json ./web/
+RUN npm ci
+COPY web ./web
+RUN npm -w web run build
+
+# Runtime
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && \
+    useradd -r -s /sbin/nologin claude-phone
+
+COPY --from=builder /src/target/release/claude-phone-gateway /usr/local/bin/
+COPY --from=web-builder /src/web/dist /var/www/claude-phone
+
+USER claude-phone
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/claude-phone-gateway"]
+CMD ["--config", "/etc/claude-phone/gateway.toml"]
