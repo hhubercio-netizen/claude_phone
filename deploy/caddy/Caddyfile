@@ -1,0 +1,42 @@
+{
+    # Cloudflare handles edge TLS; Caddy still serves local HTTPS or
+    # plain HTTP behind Cloudflare's tunnel/origin.
+    auto_https off
+    admin off
+}
+
+claude-phone.pl:443 {
+    tls /etc/caddy/cert.pem /etc/caddy/key.pem
+
+    # API endpoints — WebSocket upgrades, pass-through to gateway
+    @websocket {
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+
+    reverse_proxy /api/wrapper @websocket {
+        to 127.0.0.1:8080
+        flush_interval -1
+    }
+
+    reverse_proxy /api/phone/* @websocket {
+        to 127.0.0.1:8080
+        flush_interval -1
+    }
+
+    # Static SPA + healthcheck
+    reverse_proxy /healthz 127.0.0.1:8080
+    reverse_proxy /assets/* 127.0.0.1:8080
+    reverse_proxy /s/* 127.0.0.1:8080
+    reverse_proxy / 127.0.0.1:8080
+
+    encode gzip zstd
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        Referrer-Policy "no-referrer"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Permissions-Policy "interest-cohort=()"
+    }
+}

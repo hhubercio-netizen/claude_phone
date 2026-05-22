@@ -1,0 +1,37 @@
+[Unit]
+Description=Claude Phone gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=claude-phone
+Group=claude-phone
+WorkingDirectory=/opt/claude-phone
+ExecStart=/opt/claude-phone/bin/claude-phone-gateway --config /etc/claude-phone/gateway.toml
+Environment=RUST_LOG=info,claude_phone_gateway=debug
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/claude-phone
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
