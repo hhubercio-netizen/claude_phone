@@ -10,4 +10,9 @@ name = "claude-phone-pair"
 path = "src/main.rs"
 
 [dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 anyhow = { workspace = true }
+clap = { workspace = true }
