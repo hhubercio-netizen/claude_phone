@@ -16,8 +16,14 @@ pub struct WrapperWsState {
     pub allowed_keys: Arc<Vec<claude_phone_shared::ApiKey>>,
 }
 
+/// See phone_ws::MAX_WS_MESSAGE_BYTES — wrapper carries PTY chunks (8KB) and
+/// JSON control messages (small). 64KB caps DoS surface from a malicious peer.
+const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
+
 pub async fn handler(ws: WebSocketUpgrade, State(state): State<WrapperWsState>) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.max_message_size(MAX_WS_MESSAGE_BYTES)
+        .max_frame_size(MAX_WS_MESSAGE_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {

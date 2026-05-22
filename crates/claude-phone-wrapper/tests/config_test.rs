@@ -71,12 +71,32 @@ fn parsed_api_key_roundtrip() {
     let key = ApiKey::generate();
     let cfg = WrapperConfig {
         gateway_url: "wss://gw.example.com/api/wrapper".into(),
-        api_key: key.as_str().to_string(),
+        api_key: key.clone(),
         public_url_base: "https://example.com".into(),
         rpc_bind: "127.0.0.1:0".into(),
     };
     let parsed = cfg.parsed_api_key().expect("valid api_key");
     assert_eq!(parsed.as_str(), key.as_str());
+}
+
+#[test]
+fn debug_redacts_api_key() {
+    let key = ApiKey::generate();
+    let cfg = WrapperConfig {
+        gateway_url: "wss://gw.example.com/api/wrapper".into(),
+        api_key: key.clone(),
+        public_url_base: "https://example.com".into(),
+        rpc_bind: "127.0.0.1:0".into(),
+    };
+    let dbg = format!("{cfg:?}");
+    assert!(
+        !dbg.contains(key.as_str()),
+        "Debug output must not contain the raw api_key: {dbg}"
+    );
+    assert!(
+        dbg.contains("ApiKey(***)"),
+        "Debug must show redacted ApiKey marker: {dbg}"
+    );
 }
 
 #[test]

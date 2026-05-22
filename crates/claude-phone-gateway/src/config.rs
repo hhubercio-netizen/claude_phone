@@ -9,7 +9,11 @@ use claude_phone_shared::ApiKey;
 pub struct GatewayConfig {
     pub bind_addr: SocketAddr,
     pub static_dir: PathBuf,
-    pub api_keys: Vec<String>, // raw strings, validated on load
+    /// Typed so that any accidental `Debug`-print of the config redacts the
+    /// secret values (`[ApiKey(***), ...]`) instead of leaking them into
+    /// logs. TOML deserialization runs through `ApiKey::TryFrom<String>`
+    /// so malformed entries are rejected at load time.
+    pub api_keys: Vec<ApiKey>,
     #[serde(default = "default_session_timeout")]
     pub session_idle_timeout_secs: u64,
     #[serde(default = "default_max_sessions")]
@@ -34,19 +38,15 @@ fn default_max_sessions() -> usize {
 }
 
 impl GatewayConfig {
+    /// Backwards-compatible accessor returning the typed api keys. Kept so
+    /// older call sites still compile; new code can read the field directly.
     pub fn parsed_api_keys(&self) -> anyhow::Result<Vec<ApiKey>> {
-        self.api_keys
-            .iter()
-            .map(|s| {
-                ApiKey::parse(s).map_err(|e| anyhow::anyhow!("invalid api_key in config: {e}"))
-            })
-            .collect()
+        Ok(self.api_keys.clone())
     }
 
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         let cfg: Self = toml::from_str(&raw)?;
-        cfg.parsed_api_keys()?; // validate
         Ok(cfg)
     }
 }

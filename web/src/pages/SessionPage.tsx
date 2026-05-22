@@ -7,10 +7,22 @@ import { useWebSocket } from '../hooks/useWebSocket';
 import { useSessionStore } from '../store/session';
 import type { ControlMessage } from '../lib/protocol';
 
+// Defense-in-depth: must match server-side SessionToken::parse() (43 chars,
+// base64url charset). Anything else gets rejected client-side before we even
+// attempt a WebSocket — avoids surfacing a malformed path to the gateway and
+// avoids any chance of URL injection if React Router ever forwarded raw input.
+const TOKEN_RE = /^[A-Za-z0-9_-]{43}$/;
+
+function isValidToken(t: string | undefined): t is string {
+  return typeof t === 'string' && TOKEN_RE.test(t);
+}
+
 function gatewayWsUrl(token: string): string {
-  // Always derive from current origin so it works behind Cloudflare with TLS
+  // Always derive from current origin so it works behind Cloudflare with TLS.
+  // encodeURIComponent is redundant after isValidToken (base64url has no URI-
+  // unsafe chars), but kept as belt-and-braces in case the validator changes.
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}/api/phone/${token}`;
+  return `${protocol}//${window.location.host}/api/phone/${encodeURIComponent(token)}`;
 }
 
 export function SessionPage() {
@@ -21,8 +33,8 @@ export function SessionPage() {
   const writeRef = useRef<((bytes: Uint8Array) => void) | null>(null);
   const [helloSent, setHelloSent] = useState(false);
 
-  const tokenValid = !!token && token.length === 43;
-  const url = tokenValid ? gatewayWsUrl(token!) : null;
+  const tokenValid = isValidToken(token);
+  const url = tokenValid ? gatewayWsUrl(token) : null;
   const { state, client, on } = useWebSocket(url);
 
   // Send phone_hello after open

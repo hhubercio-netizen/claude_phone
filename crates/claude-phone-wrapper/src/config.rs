@@ -7,7 +7,11 @@ use claude_phone_shared::ApiKey;
 #[derive(Debug, Clone, Deserialize)]
 pub struct WrapperConfig {
     pub gateway_url: String,
-    pub api_key: String,
+    /// Typed so that any accidental `Debug`-print of the config redacts the
+    /// secret value (`ApiKey(***)`) instead of leaking it into logs.
+    /// TOML deserialization runs through `ApiKey::TryFrom<String>` so
+    /// malformed values are rejected at load time.
+    pub api_key: ApiKey,
     #[serde(default = "default_public_url_base")]
     pub public_url_base: String,
     #[serde(default = "default_rpc_bind")]
@@ -23,14 +27,16 @@ fn default_rpc_bind() -> String {
 }
 
 impl WrapperConfig {
+    /// Backwards-compatible accessor returning the typed api key. Kept so
+    /// older call sites that called `parsed_api_key()` still compile; new
+    /// code can read the field directly.
     pub fn parsed_api_key(&self) -> anyhow::Result<ApiKey> {
-        ApiKey::parse(&self.api_key).map_err(|e| anyhow::anyhow!("invalid api_key: {e}"))
+        Ok(self.api_key.clone())
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         let cfg: Self = toml::from_str(&raw)?;
-        cfg.parsed_api_key()?;
         Ok(cfg)
     }
 

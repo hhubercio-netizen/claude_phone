@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use tokio::sync::mpsc;
 
@@ -35,9 +36,10 @@ impl SessionRegistry {
 
     pub async fn register_wrapper(&self, token: SessionToken) -> RegisterResult {
         let key = token.as_str().to_string();
-        if self.inner.contains_key(&key) {
-            return Err(GatewayError::SessionTaken);
-        }
+
+        // Soft pre-check against max_sessions. The atomic check happens inside
+        // the Entry below (where len() is read again with the shard lock held)
+        // to keep the bound under concurrent registrations.
         if self.inner.len() >= self.max_sessions {
             return Err(GatewayError::Internal(anyhow::anyhow!(
                 "max sessions reached"
@@ -46,12 +48,20 @@ impl SessionRegistry {
 
         let (tx_to_wrapper, rx_from_phone) = mpsc::channel::<Frame>(256);
         let session = Arc::new(Session::new(token, tx_to_wrapper));
-        self.inner.insert(key, session.clone());
 
-        Ok(WrapperHandle {
-            session,
-            rx: rx_from_phone,
-        })
+        match self.inner.entry(key) {
+            Entry::Occupied(_) => Err(GatewayError::SessionTaken),
+            Entry::Vacant(v) => {
+                if v.key().len() > 64 {
+                    return Err(GatewayError::InvalidToken);
+                }
+                v.insert(session.clone());
+                Ok(WrapperHandle {
+                    session,
+                    rx: rx_from_phone,
+                })
+            }
+        }
     }
 
     pub async fn attach_phone(&self, token: &SessionToken) -> Result<PhoneHandle, GatewayError> {
@@ -65,6 +75,12 @@ impl SessionRegistry {
         let (tx_to_phone, rx_from_wrapper) = mpsc::channel::<Frame>(256);
         {
             let mut slot = session.to_phone.lock().await;
+            if slot.is_some() {
+                // A phone is already attached. Refuse the new one rather than
+                // silently stealing the session — prevents takeover by anyone
+                // who knows the token while the original holder is connected.
+                return Err(GatewayError::SessionTaken);
+            }
             *slot = Some(tx_to_phone);
         }
 

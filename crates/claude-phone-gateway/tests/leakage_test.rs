@@ -19,7 +19,7 @@ async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
     let config = GatewayConfig {
         bind_addr: format!("127.0.0.1:{port}").parse().unwrap(),
         static_dir: static_dir.path().to_owned(),
-        api_keys: vec![api_key.as_str().to_string()],
+        api_keys: vec![api_key.clone()],
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
