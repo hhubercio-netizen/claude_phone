@@ -20,9 +20,9 @@ pub struct PairResponse {
     pub qr_ascii: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusResponse {
-    pub state: &'static str,
+    pub state: String,
     pub paired: bool,
     pub peer_connected: bool,
 }
@@ -62,7 +62,7 @@ impl RpcServer {
     }
 }
 
-async fn pair_handler(State(state): State<RpcState>) -> Json<PairResponse> {
+pub async fn pair_handler(State(state): State<RpcState>) -> Json<PairResponse> {
     use claude_phone_shared::SessionToken;
     let token = SessionToken::generate();
     let url = format!("{}/s/{}", state.public_url_base, token.as_str());
@@ -80,10 +80,10 @@ async fn pair_handler(State(state): State<RpcState>) -> Json<PairResponse> {
     })
 }
 
-async fn status_handler(State(state): State<RpcState>) -> Json<StatusResponse> {
+pub async fn status_handler(State(state): State<RpcState>) -> Json<StatusResponse> {
     let s = state.session.lock().await;
     Json(StatusResponse {
-        state: "ok",
+        state: "ok".into(),
         paired: s.token.is_some(),
         peer_connected: s.peer_connected,
     })

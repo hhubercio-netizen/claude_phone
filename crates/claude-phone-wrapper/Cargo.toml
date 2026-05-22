@@ -32,6 +32,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+async-trait = { workspace = true }
 directories = "5"
 terminal_size = "0.4"
 
@@ -39,4 +40,8 @@ terminal_size = "0.4"
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
+tokio-test = { workspace = true }
+tracing-test = { workspace = true }
+http-body-util = { workspace = true }
+portpicker = { workspace = true }
