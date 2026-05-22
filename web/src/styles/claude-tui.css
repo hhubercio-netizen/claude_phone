@@ -1,0 +1,11 @@
+:root {
+  --cl-bg: #0a0a0a;
+  --cl-fg: #e6e6e6;
+  --cl-accent: #ce8c5a;
+  --cl-muted: #6e6e6e;
+  --cl-panel-bg: #141414;
+  --cl-panel-border: #2a2a2a;
+  --cl-input-bg: #1c1c1c;
+  --cl-ok: #7fb069;
+  --cl-err: #cf6679;
+}

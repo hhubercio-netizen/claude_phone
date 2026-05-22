@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import './claude-tui.css';
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: var(--cl-bg);
+  color: var(--cl-fg);
+  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: contain;
+}
+
+body {
+  /* Honor iOS safe areas */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
