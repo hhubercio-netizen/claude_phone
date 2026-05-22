@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActionBar } from '../components/ActionBar/ActionBar';
+import { MobileLayout } from '../components/Layout/MobileLayout';
 import { Terminal } from '../components/Terminal/Terminal';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useSessionStore } from '../store/session';
@@ -69,17 +70,17 @@ export function SessionPage() {
   }
 
   return (
-    <div className="h-full flex flex-col">
-      <ConnectionStatus state={state} />
-      <main className="flex-1 min-h-0">
+    <MobileLayout
+      header={<ConnectionStatus state={state} />}
+      body={
         <Terminal
           onInputBytes={handleInput}
           onResize={handleResize}
           writeHandle={(w) => (writeRef.current = w)}
         />
-      </main>
-      <ActionBar onKey={handleInput} />
-    </div>
+      }
+      footer={<ActionBar onKey={handleInput} />}
+    />
   );
 }
 
