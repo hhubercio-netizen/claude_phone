@@ -32,9 +32,11 @@ export function useWebSocket(url: string | null) {
   return {
     state,
     client: clientRef.current,
-    on: (h: (e: WsEventHandler) => void) => {
+    on: (h: (e: WsEventHandler) => void): (() => void) => {
       handlersRef.current.add(h);
-      return () => handlersRef.current.delete(h);
+      return () => {
+        handlersRef.current.delete(h);
+      };
     },
   };
 }
