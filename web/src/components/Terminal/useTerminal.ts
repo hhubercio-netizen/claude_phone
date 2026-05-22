@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { claudeTheme } from './theme';
@@ -9,7 +9,7 @@ export interface UseTerminalParams {
 }
 
 export interface TerminalApi {
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: RefObject<HTMLDivElement>;
   write: (data: string | Uint8Array) => void;
   resize: () => void;  // ask the fit addon to recompute size
   focus: () => void;

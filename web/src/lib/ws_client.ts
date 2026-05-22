@@ -29,7 +29,7 @@ export class WsClient {
         try {
           this.emit({ type: 'control', message: parseControlMessage(e.data) });
         } catch (err) {
-          console.error('bad control message', err, e.data);
+          console.error('bad control message', err, '<raw frame omitted>');
         }
       } else {
         this.emit({ type: 'binary', data: e.data as ArrayBuffer });

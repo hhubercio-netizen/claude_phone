@@ -21,16 +21,13 @@ export function SessionPage() {
   const writeRef = useRef<((bytes: Uint8Array) => void) | null>(null);
   const [helloSent, setHelloSent] = useState(false);
 
-  if (!token || token.length !== 43) {
-    return <div className="p-4 text-claude-err">Bad token format.</div>;
-  }
-
-  const url = gatewayWsUrl(token);
+  const tokenValid = !!token && token.length === 43;
+  const url = tokenValid ? gatewayWsUrl(token!) : null;
   const { state, client, on } = useWebSocket(url);
 
   // Send phone_hello after open
   useEffect(() => {
-    if (!client) return;
+    if (!client || !tokenValid) return;
     const off = on((e) => {
       if (e.type === 'open' && !helloSent) {
         client.sendControl({
@@ -48,7 +45,12 @@ export function SessionPage() {
       }
     });
     return off;
-  }, [client, on, token, helloSent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [client, on, token, helloSent, tokenValid]);
+
+  if (!tokenValid) {
+    return <div className="p-4 text-claude-err">Bad token format.</div>;
+  }
 
   function handleControl(msg: ControlMessage) {
     if (msg.type === 'server_hello') {
