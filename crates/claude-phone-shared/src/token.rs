@@ -1,99 +1,123 @@
+//! Secret token types used across the wrapper, gateway, and pair helper.
+//!
+//! Both `SessionToken` and `ApiKey` are 256-bit secrets encoded as
+//! base64url without padding (43 characters). They are emitted from
+//! the same `define_secret_token!` macro so that the security
+//! properties (manual `Debug` redaction, `Zeroize` on drop, constant-time
+//! equality via `subtle`, JSON deserialization that re-validates) cannot
+//! drift between the two types.
+
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-
-/// 256-bit secret used in the URL handed to the phone.
-/// Encoded as base64url without padding: exactly 43 characters.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SessionToken(String);
+use subtle::{Choice, ConstantTimeEq};
+use zeroize::Zeroizing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
-    #[error("token must be exactly 43 base64url characters")]
-    InvalidLength,
-    #[error("token contains invalid characters")]
-    InvalidChars,
+    /// The provided string is not a valid 43-character base64url token.
+    ///
+    /// The variant is intentionally opaque: the rejected input is not
+    /// included in the error and there is no separate variant for
+    /// "wrong length" vs "wrong characters", so the error path leaks
+    /// no information about how close the rejected value was to valid.
+    #[error("invalid token")]
+    Invalid,
 }
 
-impl SessionToken {
-    pub const LEN: usize = 43;
+/// Number of random bytes inside the secret. base64url-no-pad encoding
+/// expands 32 bytes to ceil(32 * 4 / 3) = 43 characters.
+const SECRET_BYTES: usize = 32;
+const SECRET_STR_LEN: usize = (SECRET_BYTES * 4).div_ceil(3);
 
-    pub fn generate() -> Self {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        Self(URL_SAFE_NO_PAD.encode(bytes))
-    }
-
-    pub fn parse(s: &str) -> Result<Self, TokenError> {
-        if s.len() != Self::LEN {
-            return Err(TokenError::InvalidLength);
-        }
-        if !s.chars().all(is_base64url_char) {
-            return Err(TokenError::InvalidChars);
-        }
-        Ok(Self(s.to_string()))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    /// Constant-time comparison to mitigate timing attacks.
-    pub fn constant_time_eq(&self, other: &Self) -> bool {
-        if self.0.len() != other.0.len() {
-            return false;
-        }
-        let mut diff = 0u8;
-        for (a, b) in self.0.as_bytes().iter().zip(other.0.as_bytes()) {
-            diff |= a ^ b;
-        }
-        diff == 0
-    }
+fn is_base64url_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
 
-/// API key used by wrappers to authenticate to the gateway.
-/// Same format as SessionToken but semantically distinct.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ApiKey(String);
+macro_rules! define_secret_token {
+    ($name:ident, $debug_label:literal) => {
+        /// A 256-bit secret encoded as 43-character base64url without padding.
+        ///
+        /// `Debug` and `Display` are intentionally never wired to print the
+        /// underlying value. Callers must opt in by calling `.as_str()` —
+        /// making leakage points easy to grep for in code review.
+        #[derive(Clone, Serialize, Deserialize)]
+        #[serde(try_from = "String", into = "String")]
+        pub struct $name(Zeroizing<String>);
 
-impl ApiKey {
-    pub const LEN: usize = 43;
+        impl $name {
+            /// Number of raw bytes in the underlying secret (32).
+            pub const BYTES: usize = SECRET_BYTES;
+            /// Length of the encoded string (43).
+            pub const LEN: usize = SECRET_STR_LEN;
 
-    pub fn generate() -> Self {
-        let mut bytes = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut bytes);
-        Self(URL_SAFE_NO_PAD.encode(bytes))
-    }
+            /// Generate a fresh random secret from the OS CSPRNG.
+            pub fn generate() -> Self {
+                let mut bytes = [0u8; SECRET_BYTES];
+                rand::thread_rng().fill_bytes(&mut bytes);
+                Self(Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes)))
+            }
 
-    pub fn parse(s: &str) -> Result<Self, TokenError> {
-        if s.len() != Self::LEN {
-            return Err(TokenError::InvalidLength);
+            /// Parse a string into the secret type, validating length and
+            /// charset without short-circuiting on the first invalid byte.
+            pub fn parse(s: &str) -> Result<Self, TokenError> {
+                let bytes = s.as_bytes();
+                // Fold all checks into a single bit; do not return early on
+                // the first invalid byte (timing oracle defense).
+                let length_ok = (bytes.len() == SECRET_STR_LEN) as u8;
+                let mut chars_ok: u8 = 1;
+                for &b in bytes.iter() {
+                    chars_ok &= is_base64url_byte(b) as u8;
+                }
+                if length_ok & chars_ok == 1 {
+                    Ok(Self(Zeroizing::new(s.to_string())))
+                } else {
+                    Err(TokenError::Invalid)
+                }
+            }
+
+            /// Borrow the underlying string. The only opt-in path to read
+            /// the secret value as a string.
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+
+            /// Constant-time equality, returning a plain bool for ergonomic
+            /// callers. Backed by `subtle::ConstantTimeEq` which carries a
+            /// compiler barrier so LLVM cannot collapse the comparison into
+            /// a branch.
+            pub fn ct_eq(&self, other: &Self) -> bool {
+                bool::from(<Self as ConstantTimeEq>::ct_eq(self, other))
+            }
         }
-        if !s.chars().all(is_base64url_char) {
-            return Err(TokenError::InvalidChars);
-        }
-        Ok(Self(s.to_string()))
-    }
 
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
+        impl ConstantTimeEq for $name {
+            fn ct_eq(&self, other: &Self) -> Choice {
+                self.0.as_bytes().ct_eq(other.0.as_bytes())
+            }
+        }
 
-    pub fn constant_time_eq(&self, other: &Self) -> bool {
-        if self.0.len() != other.0.len() {
-            return false;
+        impl std::fmt::Debug for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, concat!($debug_label, "(***)"))
+            }
         }
-        let mut diff = 0u8;
-        for (a, b) in self.0.as_bytes().iter().zip(other.0.as_bytes()) {
-            diff |= a ^ b;
+
+        impl TryFrom<String> for $name {
+            type Error = TokenError;
+            fn try_from(s: String) -> Result<Self, Self::Error> {
+                Self::parse(&s)
+            }
         }
-        diff == 0
-    }
+
+        impl From<$name> for String {
+            fn from(t: $name) -> String {
+                t.as_str().to_string()
+            }
+        }
+    };
 }
 
-fn is_base64url_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '-' || c == '_'
-}
+define_secret_token!(SessionToken, "SessionToken");
+define_secret_token!(ApiKey, "ApiKey");

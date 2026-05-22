@@ -99,7 +99,6 @@ async fn error_response_does_not_echo_token() {
 }
 
 #[tokio::test]
-#[ignore = "depends on Phase 2 Debug redaction"]
 #[tracing_test::traced_test]
 async fn tracing_does_not_leak_token_or_api_key_on_failure() {
     let allowed = ApiKey::generate();
