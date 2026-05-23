@@ -36,7 +36,7 @@ hyper = { version = "1", features = ["full"] }
 # which axum::serve doesn't expose. Needed in main.rs to bound the
 # slow-loris attack on the HTTP upgrade phase.
 hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "tokio"] }
-tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+tokio-tungstenite = { version = "0.29", features = ["native-tls"] }
 
 # TM-RATE.1 — per-IP HTTP rate limit. tower_governor wraps the leaky-bucket
 # `governor` library as a tower layer that special-cases WS upgrades so the
