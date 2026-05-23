@@ -721,7 +721,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-WS.6    | 30 s server-initiated Ping keepalive                                                         | GREEN   |
 | TM-WS.7    | 60 s no-pong → drop socket (post-hello idle)                                                 | TODO    |
 | TM-WS.8    | WS compression OFF (`permessage-deflate` not negotiated)                                     | VERIFY  |
-| TM-WS.9    | `public_origin` fail-loud at gateway start if not configured in production                   | TODO    |
+| TM-WS.9    | `public_origin` fail-loud at gateway start if not configured in production                   | GREEN (config.rs validate(), Environment::Production requires public_origin) |
 | TM-WS.10   | HTTP upgrade-phase timeout (axum/hyper) — explicit configured limit                          | TODO    |
 | TM-WS.11   | Strict token length on `/api/phone/:token` path before allocation                            | GREEN   |
 | TM-WS.12   | WS subprotocol negotiation — strict match or unset                                           | VERIFY  |

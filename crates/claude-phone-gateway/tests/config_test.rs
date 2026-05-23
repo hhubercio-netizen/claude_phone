@@ -1,4 +1,4 @@
-use claude_phone_gateway::config::GatewayConfig;
+use claude_phone_gateway::config::{Environment, GatewayConfig};
 use claude_phone_shared::ApiKey;
 
 #[test]
@@ -123,4 +123,60 @@ fn validate_rejects_max_sessions_too_high() {
     let cfg = cfg_with(7 * 24 * 60 * 60, 10_001);
     let err = cfg.validate().unwrap_err().to_string();
     assert!(err.contains("max_sessions"), "{err}");
+}
+
+// TM-WS.9 — production fail-loud on missing public_origin.
+
+#[test]
+fn production_without_public_origin_refuses_to_validate() {
+    // A production-tagged config that omits public_origin must be rejected
+    // at startup; otherwise TM-WS.1/.2/.3 are silently disabled in prod.
+    let toml = r#"
+        bind_addr = "127.0.0.1:8080"
+        static_dir = "/var/www/claude-phone"
+        api_keys = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        environment = "production"
+    "#;
+    let cfg: GatewayConfig = toml::from_str(toml).unwrap();
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("public_origin"), "{err}");
+    assert!(err.contains("TM-WS.9"), "{err}");
+}
+
+#[test]
+fn production_with_public_origin_validates() {
+    // A correctly-configured production gateway must pass validation so
+    // we never regress the happy path. Pairs with the negative test above.
+    let toml = r#"
+        bind_addr = "127.0.0.1:8080"
+        static_dir = "/var/www/claude-phone"
+        api_keys = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+        environment = "production"
+        public_origin = "https://claude-phone.pl"
+    "#;
+    let cfg: GatewayConfig = toml::from_str(toml).unwrap();
+    cfg.validate()
+        .expect("production with public_origin must validate");
+}
+
+#[test]
+fn development_without_public_origin_validates() {
+    // Dev / test configs commonly omit public_origin; TM-WS.9 must NOT
+    // fire outside production or we break every local dev workflow.
+    let toml = r#"
+        bind_addr = "127.0.0.1:8080"
+        static_dir = "/var/www/claude-phone"
+        api_keys = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+    "#;
+    let cfg: GatewayConfig = toml::from_str(toml).unwrap();
+    cfg.validate()
+        .expect("default Development environment permits public_origin = None");
+}
+
+#[test]
+fn environment_default_is_development() {
+    // Red-team guard: a future refactor that "harmlessly" flips the
+    // Default to Production would silently force every dev / test config
+    // through TM-WS.9 and break local workflows. Pin the default here.
+    assert_eq!(Environment::default(), Environment::Development);
 }

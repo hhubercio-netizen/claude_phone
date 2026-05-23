@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use claude_phone_gateway::{
-    config::{GatewayConfig, LogFormat},
+    config::{Environment, GatewayConfig, LogFormat},
     http::build_app,
     rate_limit::{
         AUTH_FAIL_THRESHOLD, GW_TO_PHONE_MSG_PER_SEC, PER_IP_BURST, PER_IP_REQ_PER_SEC,
@@ -55,6 +55,7 @@ async fn spawn_gateway_with_key(header_read_timeout: Duration, api_key: ApiKey) 
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
+        environment: Environment::Development,
         public_origin: None,
     };
 

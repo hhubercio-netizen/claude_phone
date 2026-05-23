@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use claude_phone_gateway::{
-    config::{GatewayConfig, LogFormat},
+    config::{Environment, GatewayConfig, LogFormat},
     http::build_app,
     serve,
 };
@@ -41,6 +41,7 @@ async fn spawn_gateway(public_origin: Option<String>) -> (u16, ApiKey) {
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
+        environment: Environment::Development,
         public_origin,
     };
 

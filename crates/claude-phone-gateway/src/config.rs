@@ -20,6 +20,13 @@ pub struct GatewayConfig {
     pub max_sessions: usize,
     #[serde(default)]
     pub log_format: LogFormat,
+    /// TM-WS.9 — deployment environment. Default is `Development` so dev
+    /// and test configs continue to boot without an explicit setting. A
+    /// production deployment must declare `environment = "production"` in
+    /// `/etc/claude-phone/gateway.toml` so `validate()` enforces the
+    /// `public_origin` invariant.
+    #[serde(default)]
+    pub environment: Environment,
     /// Expected `Origin` header on phone WebSocket upgrades. When `Some`, any
     /// browser-initiated WS that carries a different `Origin` is rejected
     /// with 403 — defense-in-depth against a malicious site opening WSes
@@ -36,6 +43,18 @@ pub enum LogFormat {
     #[default]
     Pretty,
     Json,
+}
+
+/// Deployment environment. Drives boot-time invariants that only matter
+/// in production — currently the TM-WS.9 fail-loud on missing
+/// `public_origin`. Default is `Development` so an existing dev or test
+/// config that omits the field continues to boot unchanged.
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Environment {
+    #[default]
+    Development,
+    Production,
 }
 
 /// Default phone-idle timeout: 7 days. The session lives as long as the
@@ -94,6 +113,16 @@ impl GatewayConfig {
                 self.max_sessions,
                 MIN_MAX_SESSIONS,
                 MAX_MAX_SESSIONS
+            );
+        }
+        // TM-WS.9: production must declare its public origin so that the
+        // Origin defense (TM-WS.1, .2, .3) actually fires. A misconfigured
+        // production gateway is detected at startup rather than after the
+        // first malicious request reaches the WS handler.
+        if matches!(self.environment, Environment::Production) && self.public_origin.is_none() {
+            anyhow::bail!(
+                "production environment requires public_origin to be set in \
+                 gateway.toml (TM-WS.9). Refusing to start."
             );
         }
         Ok(())

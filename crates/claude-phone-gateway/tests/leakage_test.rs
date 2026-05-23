@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use claude_phone_gateway::{
-    config::{GatewayConfig, LogFormat},
+    config::{Environment, GatewayConfig, LogFormat},
     error::GatewayError,
     http::build_app,
 };
@@ -24,6 +24,7 @@ async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
+        environment: Environment::Development,
         public_origin: None,
     };
     let app = build_app(&config).unwrap();
