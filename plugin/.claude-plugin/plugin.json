@@ -2,8 +2,7 @@
   "name": "claude-phone",
   "version": "0.1.0",
   "description": "Use your Claude Code session from your phone via /phone command.",
-  "author": "claude-phone",
-  "commands": [
-    "commands/phone.md"
-  ]
+  "author": {
+    "name": "claude-phone"
+  }
 }

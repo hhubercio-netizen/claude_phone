@@ -58,7 +58,19 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Spawn the PTY so the child can boot while the user scans the QR.
-    let claude_args: Vec<&str> = cli.claude_args.iter().map(String::as_str).collect();
+    // If plugin_dir is configured, prepend `--plugin-dir <path>` to the
+    // claude-side args so the `/phone` command is loaded into the session.
+    // This is what makes the plugin available without a global install.
+    let plugin_dir_str: Option<String> = config
+        .plugin_dir
+        .as_ref()
+        .map(|p| p.to_string_lossy().into_owned());
+    let mut claude_args: Vec<&str> = Vec::with_capacity(cli.claude_args.len() + 2);
+    if let Some(p) = plugin_dir_str.as_deref() {
+        claude_args.push("--plugin-dir");
+        claude_args.push(p);
+    }
+    claude_args.extend(cli.claude_args.iter().map(String::as_str));
     let (cols, rows) = terminal_size::terminal_size()
         .map(|(w, h)| (w.0, h.0))
         .unwrap_or((80, 24));

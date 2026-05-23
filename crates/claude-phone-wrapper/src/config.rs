@@ -16,6 +16,11 @@ pub struct WrapperConfig {
     pub public_url_base: String,
     #[serde(default = "default_rpc_bind")]
     pub rpc_bind: String,
+    /// Optional path to the `claude-phone` Claude Code plugin directory. When
+    /// set, the wrapper passes `--plugin-dir <path>` to the spawned `claude`
+    /// so the `/phone` slash command is available without a global install.
+    #[serde(default)]
+    pub plugin_dir: Option<PathBuf>,
 }
 
 fn default_public_url_base() -> String {

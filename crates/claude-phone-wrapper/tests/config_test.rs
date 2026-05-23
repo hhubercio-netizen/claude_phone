@@ -74,6 +74,7 @@ fn parsed_api_key_roundtrip() {
         api_key: key.clone(),
         public_url_base: "https://example.com".into(),
         rpc_bind: "127.0.0.1:0".into(),
+        plugin_dir: None,
     };
     let parsed = cfg.parsed_api_key().expect("valid api_key");
     assert_eq!(parsed.as_str(), key.as_str());
@@ -87,6 +88,7 @@ fn debug_redacts_api_key() {
         api_key: key.clone(),
         public_url_base: "https://example.com".into(),
         rpc_bind: "127.0.0.1:0".into(),
+        plugin_dir: None,
     };
     let dbg = format!("{cfg:?}");
     assert!(
@@ -105,4 +107,44 @@ fn rejects_missing_required_fields() {
     let path = write_toml(&dir, "config.toml", r#"public_url_base = "x""#);
     let r = WrapperConfig::load(&path);
     assert!(r.is_err());
+}
+
+#[test]
+fn plugin_dir_defaults_to_none_and_parses_when_set() {
+    let key = ApiKey::generate();
+    let dir = tempfile::tempdir().unwrap();
+
+    // Default: absent → None
+    let p1 = write_toml(
+        &dir,
+        "no-plugin.toml",
+        &format!(
+            r#"
+gateway_url = "wss://gw.example.com/api/wrapper"
+api_key = "{}"
+"#,
+            key.as_str()
+        ),
+    );
+    let cfg1 = WrapperConfig::load(&p1).expect("loads");
+    assert!(cfg1.plugin_dir.is_none());
+
+    // Explicit path roundtrips.
+    let p2 = write_toml(
+        &dir,
+        "with-plugin.toml",
+        &format!(
+            r#"
+gateway_url = "wss://gw.example.com/api/wrapper"
+api_key = "{}"
+plugin_dir = "/opt/claude-phone-src/plugin"
+"#,
+            key.as_str()
+        ),
+    );
+    let cfg2 = WrapperConfig::load(&p2).expect("loads");
+    assert_eq!(
+        cfg2.plugin_dir.as_deref(),
+        Some(std::path::Path::new("/opt/claude-phone-src/plugin"))
+    );
 }
