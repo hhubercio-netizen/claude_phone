@@ -181,11 +181,7 @@ pub async fn run(pty: Arc<PtySession>, first_rx: broadcast::Receiver<Vec<u8>>) {
     let pty_for_stdin = pty.clone();
     let stdin_task = tokio::task::spawn_blocking(move || {
         let handle = tokio::runtime::Handle::current();
-        loop {
-            let ev = match event::read() {
-                Ok(ev) => ev,
-                Err(_) => break,
-            };
+        while let Ok(ev) = event::read() {
             match ev {
                 Event::Key(k) => {
                     if let Some(bytes) = key_to_bytes(k) {
@@ -304,10 +300,7 @@ mod tests {
     #[test]
     fn ctrl_shift_x_folds_onto_ctrl_x() {
         let mods = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
-        assert_eq!(
-            key_to_bytes(k(KeyCode::Char('X'), mods)),
-            Some(vec![0x18]),
-        );
+        assert_eq!(key_to_bytes(k(KeyCode::Char('X'), mods)), Some(vec![0x18]),);
     }
 
     #[test]

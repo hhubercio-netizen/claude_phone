@@ -13,7 +13,7 @@ export type ErrorCode =
   | 'protocol_violation';
 
 export type ControlMessage =
-  | { type: 'wrapper_hello'; api_key: ApiKey; token: SessionToken; cols: number; rows: number; claude_version?: string }
+  | { type: 'wrapper_hello'; api_key: ApiKey; token: SessionToken; cols: number; rows: number }
   | { type: 'phone_hello'; token: SessionToken; cols: number; rows: number; user_agent?: string }
   | { type: 'server_hello'; session_id: string; peer_connected: boolean }
   | { type: 'error'; code: ErrorCode; message: string }

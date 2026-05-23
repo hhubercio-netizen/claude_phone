@@ -20,6 +20,14 @@ pub struct GatewayConfig {
     pub max_sessions: usize,
     #[serde(default)]
     pub log_format: LogFormat,
+    /// Expected `Origin` header on phone WebSocket upgrades. When `Some`, any
+    /// browser-initiated WS that carries a different `Origin` is rejected
+    /// with 403 — defense-in-depth against a malicious site opening WSes
+    /// across origins should a token ever leak. When `None` (dev/tests),
+    /// no Origin enforcement is performed. Production must set this to e.g.
+    /// `"https://claude-phone.pl"`.
+    #[serde(default)]
+    pub public_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Default)]

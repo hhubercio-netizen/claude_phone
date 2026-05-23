@@ -20,6 +20,17 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      - run: cargo audit --deny warnings
+
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -37,3 +48,6 @@ jobs:
       - run: npm run lint
       - run: npm run test
       - run: npm run build
+      # `npm audit` exits non-zero on high/critical advisories. We scope to
+      # production deps; dev tooling (Vite plugins etc.) is allowed to lag.
+      - run: npm audit --omit=dev --audit-level=high

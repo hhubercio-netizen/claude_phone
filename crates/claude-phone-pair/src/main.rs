@@ -8,6 +8,13 @@ struct Cli {
     #[arg(long, env = "CLAUDE_PHONE_RPC_URL")]
     rpc_url: Option<String>,
 
+    /// Ephemeral bearer token issued by the wrapper at startup and exported
+    /// to the child PTY env as CLAUDE_PHONE_RPC_TOKEN. Without it the RPC
+    /// server returns 401 — that's the defense against any process that
+    /// happens to find the listening loopback port.
+    #[arg(long, env = "CLAUDE_PHONE_RPC_TOKEN", hide_env_values = true)]
+    rpc_token: Option<String>,
+
     /// Output as JSON (machine-readable).
     #[arg(long)]
     json: bool,
@@ -28,9 +35,15 @@ async fn main() -> anyhow::Result<()> {
             "CLAUDE_PHONE_RPC_URL not set. Run `claude-phone` instead of `claude` to enable phone bridging."
         )
     })?;
+    let rpc_token = cli.rpc_token.ok_or_else(|| {
+        anyhow::anyhow!(
+            "CLAUDE_PHONE_RPC_TOKEN not set. The wrapper exports this to its child env; if you're seeing this, you ran `claude-phone-pair` outside the claude PTY started by `claude-phone`."
+        )
+    })?;
 
     let resp: PairResponse = reqwest::Client::new()
         .post(format!("{rpc_url}/pair"))
+        .bearer_auth(&rpc_token)
         .send()
         .await?
         .error_for_status()?

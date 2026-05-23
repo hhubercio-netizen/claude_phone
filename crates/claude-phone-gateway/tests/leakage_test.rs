@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use claude_phone_gateway::{
     config::{GatewayConfig, LogFormat},
+    error::GatewayError,
     http::build_app,
 };
 use claude_phone_shared::{
@@ -23,6 +24,7 @@ async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
+        public_origin: None,
     };
     let app = build_app(&config).unwrap();
     let listener = tokio::net::TcpListener::bind(config.bind_addr)
@@ -53,7 +55,6 @@ async fn error_response_does_not_echo_api_key() {
         token: SessionToken::generate(),
         cols: 80,
         rows: 24,
-        claude_version: None,
     });
     ws.send(Message::Text(serde_json::to_string(&hello).unwrap()))
         .await
@@ -98,6 +99,94 @@ async fn error_response_does_not_echo_token() {
     );
 }
 
+/// GatewayError contract: NO variant — current or future — may surface a raw
+/// SessionToken or ApiKey through `Debug` / `Display`. Today none of the
+/// variants carry a secret payload, so this test passes trivially. The point
+/// is forward-looking: if a contributor ever adds e.g.
+/// `InvalidToken(SessionToken)` and writes `#[error("bad token: {0}")]`, this
+/// test breaks the build. SessionToken/ApiKey both redact their own `Debug`,
+/// so the failure mode would be a `#[error(...)]` Display string built from
+/// `token.as_str()` or similar.
+#[test]
+fn gateway_error_never_leaks_secrets_in_debug_or_display() {
+    let token = SessionToken::generate();
+    let api_key = ApiKey::generate();
+    let token_str = token.as_str().to_string();
+    let api_key_str = api_key.as_str().to_string();
+
+    let variants: Vec<GatewayError> = vec![
+        GatewayError::SessionNotFound,
+        GatewayError::InvalidToken,
+        GatewayError::InvalidApiKey,
+        GatewayError::SessionTaken,
+        GatewayError::Internal(anyhow::anyhow!("synthetic internal failure")),
+        GatewayError::Io(std::io::Error::other("synthetic io failure")),
+    ];
+
+    for v in &variants {
+        let dbg = format!("{:?}", v);
+        let disp = format!("{}", v);
+        assert!(
+            !dbg.contains(&token_str),
+            "GatewayError Debug leaked SessionToken in variant {dbg}"
+        );
+        assert!(
+            !dbg.contains(&api_key_str),
+            "GatewayError Debug leaked ApiKey in variant {dbg}"
+        );
+        assert!(
+            !disp.contains(&token_str),
+            "GatewayError Display leaked SessionToken in variant {disp}"
+        );
+        assert!(
+            !disp.contains(&api_key_str),
+            "GatewayError Display leaked ApiKey in variant {disp}"
+        );
+    }
+}
+
+/// Stronger sibling of the above: scans Debug output for ANY 43-char
+/// base64url substring (the shape of both SessionToken and ApiKey). This
+/// catches the case where a future variant carries a `String` payload that
+/// happens to be a raw, un-typed token — at which point the typed-secret
+/// redaction wouldn't fire because the value never wore the type.
+#[test]
+fn gateway_error_debug_contains_no_token_shaped_substring() {
+    fn looks_like_secret(s: &str) -> bool {
+        const LEN: usize = SessionToken::LEN; // == ApiKey::LEN == 43
+        if s.len() < LEN {
+            return false;
+        }
+        let bytes = s.as_bytes();
+        for window in bytes.windows(LEN) {
+            if window
+                .iter()
+                .all(|&b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    let variants: Vec<GatewayError> = vec![
+        GatewayError::SessionNotFound,
+        GatewayError::InvalidToken,
+        GatewayError::InvalidApiKey,
+        GatewayError::SessionTaken,
+        GatewayError::Internal(anyhow::anyhow!("synthetic internal failure")),
+        GatewayError::Io(std::io::Error::other("synthetic io failure")),
+    ];
+
+    for v in &variants {
+        let dbg = format!("{:?}", v);
+        assert!(
+            !looks_like_secret(&dbg),
+            "GatewayError Debug looks like it might contain a secret-shaped substring: {dbg}"
+        );
+    }
+}
+
 #[tokio::test]
 #[tracing_test::traced_test]
 async fn tracing_does_not_leak_token_or_api_key_on_failure() {
@@ -119,7 +208,6 @@ async fn tracing_does_not_leak_token_or_api_key_on_failure() {
         token: bad_token,
         cols: 80,
         rows: 24,
-        claude_version: None,
     });
     ws.send(Message::Text(serde_json::to_string(&hello).unwrap()))
         .await

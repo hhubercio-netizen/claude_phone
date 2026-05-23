@@ -40,6 +40,14 @@ async fn main() -> anyhow::Result<()> {
     let session = Arc::new(tokio::sync::Mutex::new(SessionState::default()));
     let (pair_tx, mut pair_rx) = mpsc::channel::<()>(4);
 
+    // Ephemeral bearer for the local RPC server. Generated fresh each start
+    // and propagated to the child's env (CLAUDE_PHONE_RPC_TOKEN). Without it
+    // any process reaching 127.0.0.1 could mint a session token; with it the
+    // only callers that authenticate are descendants of this wrapper that
+    // inherited the env (i.e. the `claude` PTY child and `claude-phone-pair`
+    // invoked from inside it).
+    let rpc_auth = claude_phone_shared::ApiKey::generate();
+
     // Start the RPC server BEFORE spawning the PTY so we know the listening
     // URL ahead of time and can inject CLAUDE_PHONE_RPC_URL into the child's
     // env. Without it the `/phone` plugin inside `claude` cannot find us.
@@ -47,6 +55,7 @@ async fn main() -> anyhow::Result<()> {
         session: session.clone(),
         public_url_base: config.public_url_base.clone(),
         pair_trigger: pair_tx,
+        auth_token: rpc_auth.clone(),
     };
     let rpc = RpcServer::start_with_state(&config.rpc_bind, rpc_state)
         .await
@@ -80,7 +89,10 @@ async fn main() -> anyhow::Result<()> {
         &claude_args,
         cols,
         rows,
-        &[("CLAUDE_PHONE_RPC_URL", rpc_url.as_str())],
+        &[
+            ("CLAUDE_PHONE_RPC_URL", rpc_url.as_str()),
+            ("CLAUDE_PHONE_RPC_TOKEN", rpc_auth.as_str()),
+        ],
     )
     .with_context(|| format!("spawning PTY with {}", cli.claude_bin))?;
     let pty = Arc::new(pty);

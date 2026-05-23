@@ -1,6 +1,6 @@
 ---
 description: Show QR code to continue this session on your phone
-allowed-tools: Bash(claude-phone-pair*)
+allowed-tools: Bash(claude-phone-pair)
 ---
 
 Execute the bash command `claude-phone-pair` exactly ONCE. After the tool returns, your entire reply MUST be the literal stdout the tool produced — nothing before it, nothing after it, no code fences, no commentary, no repetition.

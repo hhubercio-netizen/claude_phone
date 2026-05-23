@@ -22,8 +22,6 @@ pub struct WrapperHello {
     pub token: SessionToken,
     pub cols: u16,
     pub rows: u16,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub claude_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

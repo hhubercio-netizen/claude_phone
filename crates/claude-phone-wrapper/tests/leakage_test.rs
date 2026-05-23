@@ -3,11 +3,10 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     http::{Method, Request, StatusCode},
-    Router,
 };
 use claude_phone_shared::{ApiKey, SessionToken};
 use claude_phone_wrapper::gateway_client::{GatewayClient, GatewayClientConfig};
-use claude_phone_wrapper::rpc::{PairResponse, RpcState};
+use claude_phone_wrapper::rpc::{build_router, PairResponse, RpcState};
 use claude_phone_wrapper::session::SessionState;
 use http_body_util::BodyExt;
 use tokio::sync::{mpsc, Mutex};
@@ -33,23 +32,24 @@ async fn pair_response_does_not_leak_api_key() {
 
     let session = Arc::new(Mutex::new(SessionState::default()));
     let (tx, _rx) = mpsc::channel(1);
+    let auth = ApiKey::generate();
     let state = RpcState {
         session,
         public_url_base: "https://example.com".into(),
         pair_trigger: tx,
+        auth_token: auth.clone(),
     };
-    let app = Router::new()
-        .route(
-            "/pair",
-            axum::routing::post(claude_phone_wrapper::rpc::pair_handler),
-        )
-        .with_state(state);
+    let app = build_router(state);
 
     let resp = app
         .oneshot(
             Request::builder()
                 .method(Method::POST)
                 .uri("/pair")
+                .header(
+                    axum::http::header::AUTHORIZATION,
+                    format!("Bearer {}", auth.as_str()),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -2,44 +2,56 @@ use std::sync::Arc;
 
 use axum::{
     body::Body,
-    http::{Method, Request, StatusCode},
+    http::{header, Method, Request, StatusCode},
     Router,
 };
-use claude_phone_wrapper::rpc::{PairResponse, RpcState, StatusResponse};
+use claude_phone_shared::ApiKey;
+use claude_phone_wrapper::rpc::{build_router, PairResponse, RpcState, StatusResponse};
 use claude_phone_wrapper::session::SessionState;
 use http_body_util::BodyExt;
 use tokio::sync::{mpsc, Mutex};
 use tower::ServiceExt;
 
-fn make_app() -> (Router, mpsc::Receiver<()>, Arc<Mutex<SessionState>>) {
+struct Harness {
+    app: Router,
+    auth: ApiKey,
+    pair_rx: mpsc::Receiver<()>,
+    session: Arc<Mutex<SessionState>>,
+}
+
+fn make_harness() -> Harness {
     let session = Arc::new(Mutex::new(SessionState::default()));
     let (tx, rx) = mpsc::channel::<()>(1);
+    let auth = ApiKey::generate();
     let state = RpcState {
         session: session.clone(),
         public_url_base: "https://example.com".into(),
         pair_trigger: tx,
+        auth_token: auth.clone(),
     };
-    let app = Router::new()
-        .route(
-            "/pair",
-            axum::routing::post(claude_phone_wrapper::rpc::pair_handler),
-        )
-        .route(
-            "/status",
-            axum::routing::get(claude_phone_wrapper::rpc::status_handler),
-        )
-        .with_state(state);
-    (app, rx, session)
+    Harness {
+        app: build_router(state),
+        auth,
+        pair_rx: rx,
+        session,
+    }
+}
+
+fn bearer(token: &ApiKey) -> String {
+    format!("Bearer {}", token.as_str())
 }
 
 #[tokio::test]
 async fn post_pair_returns_token_and_url() {
-    let (app, mut rx, session) = make_app();
-    let resp = app
+    let mut h = make_harness();
+    let resp = h
+        .app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
                 .uri("/pair")
+                .header(header::AUTHORIZATION, bearer(&h.auth))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -52,21 +64,23 @@ async fn post_pair_returns_token_and_url() {
     assert!(!parsed.token.is_empty());
     assert!(!parsed.qr_ascii.is_empty());
 
-    let s = session.lock().await;
+    let s = h.session.lock().await;
     assert!(s.token.is_some());
     assert_eq!(s.public_url.as_deref(), Some(parsed.url.as_str()));
     drop(s);
-    rx.try_recv().expect("pair_trigger fired");
+    h.pair_rx.try_recv().expect("pair_trigger fired");
 }
 
 #[tokio::test]
 async fn get_status_reflects_session_state() {
-    let (app, _rx, _session) = make_app();
-    let resp = app
+    let h = make_harness();
+    let resp = h
+        .app
         .clone()
         .oneshot(
             Request::builder()
                 .uri("/status")
+                .header(header::AUTHORIZATION, bearer(&h.auth))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -78,21 +92,26 @@ async fn get_status_reflects_session_state() {
     assert!(!s.peer_connected);
     assert_eq!(s.state, "ok");
 
-    let _ = app
+    let _ = h
+        .app
         .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
                 .uri("/pair")
+                .header(header::AUTHORIZATION, bearer(&h.auth))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    let resp = app
+    let resp = h
+        .app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/status")
+                .header(header::AUTHORIZATION, bearer(&h.auth))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -104,12 +123,32 @@ async fn get_status_reflects_session_state() {
 }
 
 #[tokio::test]
-async fn pair_qr_ascii_contains_full_url() {
-    // The QR encodes the full URL — render_terminal output is the ASCII
-    // art so the URL won't be literally in it, but a quick sanity check
-    // is that qr_ascii has more than one line of content.
-    let (app, _rx, _session) = make_app();
-    let resp = app
+async fn pair_qr_ascii_contains_multiple_lines() {
+    let h = make_harness();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/pair")
+                .header(header::AUTHORIZATION, bearer(&h.auth))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let parsed: PairResponse = serde_json::from_slice(&bytes).unwrap();
+    assert!(parsed.qr_ascii.lines().count() > 5);
+}
+
+#[tokio::test]
+async fn pair_without_authorization_rejected_401() {
+    let h = make_harness();
+    let resp = h
+        .app
+        .clone()
         .oneshot(
             Request::builder()
                 .method(Method::POST)
@@ -119,7 +158,84 @@ async fn pair_qr_ascii_contains_full_url() {
         )
         .await
         .unwrap();
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let parsed: PairResponse = serde_json::from_slice(&bytes).unwrap();
-    assert!(parsed.qr_ascii.lines().count() > 5);
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn status_without_authorization_rejected_401() {
+    let h = make_harness();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn pair_with_wrong_bearer_rejected_401() {
+    let h = make_harness();
+    let wrong = ApiKey::generate();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/pair")
+                .header(header::AUTHORIZATION, bearer(&wrong))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn pair_with_malformed_bearer_rejected_401() {
+    let h = make_harness();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/pair")
+                .header(header::AUTHORIZATION, "Bearer not-a-real-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn pair_with_basic_auth_rejected_401() {
+    // The middleware insists on the "Bearer " scheme. Anything else (Basic,
+    // ApiKey, Digest, or naked token) must be rejected so we never silently
+    // accept a non-Bearer header that happens to contain the right bytes.
+    let h = make_harness();
+    let raw = format!("Basic {}", h.auth.as_str());
+    let resp = h
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/pair")
+                .header(header::AUTHORIZATION, raw)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }

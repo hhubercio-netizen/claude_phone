@@ -25,8 +25,7 @@ registers a session token.
   api_key: string,       // 43 base64url chars
   token: string,         // 43 base64url chars (the session token)
   cols: number,          // initial PTY width
-  rows: number,          // initial PTY height
-  claude_version?: string }
+  rows: number }         // initial PTY height
 ```
 
 Rust: `claude_phone_shared::protocol::WrapperHello`.

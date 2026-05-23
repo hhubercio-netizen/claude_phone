@@ -8,7 +8,6 @@ fn wrapper_hello_roundtrip() {
         token: SessionToken::generate(),
         cols: 80,
         rows: 24,
-        claude_version: Some("1.2.3".into()),
     });
 
     let s = serde_json::to_string(&msg).unwrap();
@@ -19,7 +18,6 @@ fn wrapper_hello_roundtrip() {
         ControlMessage::WrapperHello(h) => {
             assert_eq!(h.cols, 80);
             assert_eq!(h.rows, 24);
-            assert_eq!(h.claude_version.as_deref(), Some("1.2.3"));
         }
         _ => panic!("wrong variant"),
     }

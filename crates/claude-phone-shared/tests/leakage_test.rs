@@ -31,7 +31,6 @@ fn debug_wrapper_hello_does_not_leak_secrets() {
         token,
         cols: 80,
         rows: 24,
-        claude_version: None,
     };
 
     let s = format!("{:?}", hello);
@@ -77,7 +76,6 @@ fn control_message_serialized_json_does_not_unexpectedly_omit_token() {
         token: token.clone(),
         cols: 80,
         rows: 24,
-        claude_version: None,
     });
     let json = serde_json::to_string(&msg).unwrap();
     assert!(json.contains("\"api_key\":"));

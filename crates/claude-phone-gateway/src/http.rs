@@ -63,6 +63,7 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
 
     let phone_state = phone_ws::PhoneWsState {
         registry: registry.clone(),
+        public_origin: config.public_origin.clone(),
     };
 
     let static_state = statics::StaticsState {
@@ -80,7 +81,12 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
     });
 
     // Security headers applied to ALL responses. Static content is same-origin
-    // only and never embeds remote scripts, so CSP can be strict.
+    // only and never embeds remote scripts, so CSP can be strict. `connect-src
+    // 'self'` is sufficient for the page's same-host WebSocket — modern
+    // browsers (Chrome, Firefox, Safari) match wss to the document's host
+    // under 'self' even though the spec arguably wouldn't because scheme
+    // differs from https. If you ever serve from a different host for the
+    // WS endpoint, add `wss://<host>` explicitly here.
     let security_headers = tower::ServiceBuilder::new()
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
@@ -90,11 +96,22 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
                  style-src 'self' 'unsafe-inline'; \
                  img-src 'self' data:; \
                  font-src 'self' data:; \
-                 connect-src 'self' ws: wss:; \
+                 connect-src 'self'; \
                  frame-ancestors 'none'; \
                  base-uri 'self'; \
-                 form-action 'self'",
+                 form-action 'self'; \
+                 object-src 'none'",
             ),
+        ))
+        // Strict-Transport-Security: 2-year preload-eligible policy. Even
+        // though the production deployment sits behind Cloudflare (which
+        // can manage HSTS itself), emitting this from the origin is
+        // defense-in-depth — if someone runs the gateway without CF in
+        // front, the policy still gets advertised. Browsers ignore the
+        // header on plain-HTTP responses, so it costs nothing on dev.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=63072000; includeSubDomains; preload"),
         ))
         .layer(SetResponseHeaderLayer::overriding(
             header::REFERRER_POLICY,
@@ -111,6 +128,12 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("permissions-policy"),
             HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
+        ))
+        // Hide the server name. Tower-http's default trace gives us all the
+        // diagnostics we need; advertising "axum" to clients adds nothing.
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("server"),
+            HeaderValue::from_static("claude-phone"),
         ));
 
     let app = Router::new()

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
 
@@ -15,6 +16,9 @@ use crate::session::{Frame, SessionRegistry};
 #[derive(Clone)]
 pub struct PhoneWsState {
     pub registry: Arc<SessionRegistry>,
+    /// When `Some`, browser-initiated WSes whose `Origin` header doesn't
+    /// equal this value are rejected with 403. When `None`, no enforcement.
+    pub public_origin: Option<String>,
 }
 
 /// Hard cap on a single WebSocket message. PTY stdout chunks are 8KB; phone
@@ -25,13 +29,25 @@ const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
 pub async fn handler(
     ws: WebSocketUpgrade,
     Path(token_str): Path<String>,
+    headers: HeaderMap,
     State(state): State<PhoneWsState>,
 ) -> Response {
-    // Pre-validate before opening the WebSocket so we can return a normal
-    // 400/404 response rather than upgrading and immediately closing. Saves a
-    // round-trip and avoids allocating any session resources.
-    if token_str.len() > 64 || token_str.len() < 8 {
-        return axum::http::StatusCode::BAD_REQUEST.into_response();
+    // Strict equality on token length — anything else is malformed and we
+    // refuse to even allocate the upgrade. The previous 8..=64 band let
+    // off-shape strings reach SessionToken::parse() unnecessarily.
+    if token_str.len() != SessionToken::LEN {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    // Defense-in-depth Origin check. Only fires when the deployer set
+    // `public_origin` in gateway.toml AND the client sent an `Origin`
+    // header (browsers always do; non-browser clients may not).
+    if let Some(expected) = state.public_origin.as_deref() {
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            if origin != expected {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+        }
     }
 
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)

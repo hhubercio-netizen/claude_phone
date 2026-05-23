@@ -12,7 +12,7 @@ use base64::Engine;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use subtle::{Choice, ConstantTimeEq};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
@@ -42,8 +42,7 @@ macro_rules! define_secret_token {
         /// `Debug` and `Display` are intentionally never wired to print the
         /// underlying value. Callers must opt in by calling `.as_str()` —
         /// making leakage points easy to grep for in code review.
-        #[derive(Clone, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Clone)]
         pub struct $name(Zeroizing<String>);
 
         impl $name {
@@ -104,16 +103,63 @@ macro_rules! define_secret_token {
             }
         }
 
+        /// `try_from`-style validation entry. Kept as a convenience for
+        /// callers who already hold an owned String; the input is dropped
+        /// at the end of the call. Prefer `parse(&str)` to avoid handing
+        /// us a `String` whose tail bytes we cannot zero ourselves.
         impl TryFrom<String> for $name {
             type Error = TokenError;
-            fn try_from(s: String) -> Result<Self, Self::Error> {
-                Self::parse(&s)
+            fn try_from(mut s: String) -> Result<Self, Self::Error> {
+                let out = Self::parse(&s);
+                // Best-effort overwrite of the caller's input before drop
+                // so an owned secret String the caller handed us does not
+                // outlive this call in unsanitized form on the heap.
+                s.zeroize();
+                out
             }
         }
 
-        impl From<$name> for String {
-            fn from(t: $name) -> String {
-                t.as_str().to_string()
+        /// Manual `Serialize` so the value passes through `serialize_str`
+        /// by reference — no intermediate owned `String` is allocated, so
+        /// no plain `String` of the secret is dropped without zeroization
+        /// during JSON encoding.
+        impl Serialize for $name {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        /// Manual `Deserialize` with a visitor that prefers the borrowed
+        /// `visit_str` path (no allocation). When a format must hand us
+        /// an owned `String` (e.g. JSON with escapes), we zeroize that
+        /// intermediate buffer ourselves before it is dropped.
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct SecretVisitor;
+                impl<'de> serde::de::Visitor<'de> for SecretVisitor {
+                    type Value = $name;
+                    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                        write!(f, "a 43-character base64url secret")
+                    }
+                    fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                        $name::parse(v).map_err(E::custom)
+                    }
+                    fn visit_string<E: serde::de::Error>(
+                        self,
+                        mut v: String,
+                    ) -> Result<Self::Value, E> {
+                        let out = $name::parse(&v);
+                        v.zeroize();
+                        out.map_err(E::custom)
+                    }
+                }
+                deserializer.deserialize_str(SecretVisitor)
             }
         }
     };

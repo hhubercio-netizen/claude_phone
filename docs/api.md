@@ -45,8 +45,7 @@ matching `WrapperHello`:
   "api_key": "<43-char base64url>",
   "token": "<43-char base64url>",
   "cols": 80,
-  "rows": 24,
-  "claude_version": "1.2.3"
+  "rows": 24
 }
 ```
 

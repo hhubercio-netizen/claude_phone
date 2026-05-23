@@ -29,7 +29,6 @@ impl GatewayClient {
             token: config.token,
             cols: config.cols,
             rows: config.rows,
-            claude_version: None,
         });
         sink.send(Message::Text(serde_json::to_string(&hello)?))
             .await?;

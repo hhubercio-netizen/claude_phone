@@ -50,7 +50,10 @@ async fn subscribe_after_spawn_sees_subsequent_output() {
     // the point of subscribe forward. We use a tiny sleep on the *producer*
     // to give us time to subscribe before any output is generated.
     let (prog, args): (&str, Vec<&str>) = if cfg!(windows) {
-        ("cmd.exe", vec!["/c", "ping -n 2 127.0.0.1 > NUL && echo late"])
+        (
+            "cmd.exe",
+            vec!["/c", "ping -n 2 127.0.0.1 > NUL && echo late"],
+        )
     } else {
         ("sh", vec!["-c", "sleep 0.3; echo late"])
     };

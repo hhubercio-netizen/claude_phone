@@ -9,9 +9,14 @@ use claude_phone_shared::{
     ApiKey, SessionToken,
 };
 use futures::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
 async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
+    spawn_test_gateway_with_origin(api_key, None).await
+}
+
+async fn spawn_test_gateway_with_origin(api_key: ApiKey, public_origin: Option<String>) -> u16 {
     let static_dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(static_dir.path().join("index.html"), "<html></html>")
         .expect("write index.html");
@@ -25,6 +30,7 @@ async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
+        public_origin,
     };
 
     let app = build_app(&config).expect("build_app");
@@ -55,7 +61,6 @@ async fn wrapper_and_phone_round_trip() {
         token: token.clone(),
         cols: 80,
         rows: 24,
-        claude_version: None,
     });
     wrapper_ws
         .send(Message::Text(serde_json::to_string(&hello).unwrap()))
@@ -129,7 +134,6 @@ async fn wrapper_rejects_bad_api_key() {
         token: SessionToken::generate(),
         cols: 80,
         rows: 24,
-        claude_version: None,
     });
     ws.send(Message::Text(serde_json::to_string(&hello).unwrap()))
         .await
@@ -164,4 +168,171 @@ async fn phone_rejects_unknown_token() {
     };
     let msg: ControlMessage = serde_json::from_str(&text).unwrap();
     assert!(matches!(msg, ControlMessage::Error(_)));
+}
+
+// Build a tungstenite ws:// request with an explicit Origin header. Browsers
+// always send Origin; non-browser clients (test clients, server-side bridges)
+// may not. The gateway only enforces equality when Origin is present AND
+// public_origin is configured.
+fn ws_request_with_origin(
+    url: &str,
+    origin: &str,
+) -> tokio_tungstenite::tungstenite::handshake::client::Request {
+    let mut req = url.into_client_request().expect("ws request");
+    req.headers_mut()
+        .insert("origin", origin.parse().expect("origin header value"));
+    req
+}
+
+#[tokio::test]
+async fn phone_ws_accepts_matching_origin() {
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let expected_origin = "https://claude-phone.pl".to_string();
+    let port = spawn_test_gateway_with_origin(api_key.clone(), Some(expected_origin.clone())).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Register wrapper so the phone token is known.
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    let hello = ControlMessage::WrapperHello(WrapperHello {
+        api_key: api_key.clone(),
+        token: token.clone(),
+        cols: 80,
+        rows: 24,
+    });
+    wrapper_ws
+        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    let req = ws_request_with_origin(
+        &format!("ws://127.0.0.1:{port}/api/phone/{}", token.as_str()),
+        &expected_origin,
+    );
+    let (mut phone_ws, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("phone connect with matching origin should succeed");
+
+    let resp = phone_ws.next().await.unwrap().unwrap();
+    let text = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected text frame, got {other:?}"),
+    };
+    let msg: ControlMessage = serde_json::from_str(&text).unwrap();
+    assert!(matches!(msg, ControlMessage::ServerHello(_)));
+}
+
+#[tokio::test]
+async fn phone_ws_rejects_wrong_origin() {
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let port = spawn_test_gateway_with_origin(
+        api_key.clone(),
+        Some("https://claude-phone.pl".to_string()),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Register wrapper so the token would otherwise be valid.
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    let hello = ControlMessage::WrapperHello(WrapperHello {
+        api_key: api_key.clone(),
+        token: token.clone(),
+        cols: 80,
+        rows: 24,
+    });
+    wrapper_ws
+        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    let req = ws_request_with_origin(
+        &format!("ws://127.0.0.1:{port}/api/phone/{}", token.as_str()),
+        "https://evil.example.com",
+    );
+    let err = tokio_tungstenite::connect_async(req)
+        .await
+        .expect_err("mismatched Origin must be rejected before upgrade");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("403") || msg.to_lowercase().contains("forbidden"),
+        "expected 403/forbidden, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn phone_ws_allows_missing_origin_when_public_origin_set() {
+    // Non-browser clients (server bridges, CLIs) may not send Origin at all.
+    // Public Origin enforcement must only fire when the client actually sends
+    // one, otherwise we'd lock out legitimate non-browser callers.
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let port = spawn_test_gateway_with_origin(
+        api_key.clone(),
+        Some("https://claude-phone.pl".to_string()),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    let hello = ControlMessage::WrapperHello(WrapperHello {
+        api_key: api_key.clone(),
+        token: token.clone(),
+        cols: 80,
+        rows: 24,
+    });
+    wrapper_ws
+        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    // tokio_tungstenite's plain URL form doesn't add Origin.
+    let (mut phone_ws, _) = tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{port}/api/phone/{}",
+        token.as_str()
+    ))
+    .await
+    .expect("phone connect without origin should succeed");
+
+    let resp = phone_ws.next().await.unwrap().unwrap();
+    let text = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected text frame, got {other:?}"),
+    };
+    let msg: ControlMessage = serde_json::from_str(&text).unwrap();
+    assert!(matches!(msg, ControlMessage::ServerHello(_)));
+}
+
+#[tokio::test]
+async fn phone_ws_rejects_malformed_token_length() {
+    // Strict length check: anything other than SessionToken::LEN gets a 400
+    // before we even allocate the WS upgrade machinery. This is the cheap
+    // pre-filter that keeps off-shape probe strings from touching session code.
+    let api_key = ApiKey::generate();
+    let port = spawn_test_gateway(api_key).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 10 chars is below SessionToken::LEN (43).
+    let too_short = "abcdefghij";
+    let err =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/phone/{too_short}"))
+            .await
+            .expect_err("malformed-length token must be rejected with 400");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("400") || msg.to_lowercase().contains("bad request"),
+        "expected 400/bad request, got: {msg}"
+    );
 }
