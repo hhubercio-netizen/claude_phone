@@ -34,20 +34,13 @@ async fn main() -> anyhow::Result<()> {
     let config =
         WrapperConfig::load(&config_path).with_context(|| format!("loading {config_path:?}"))?;
 
-    // Spawn the PTY up-front so the child can boot while the user scans the QR.
-    let claude_args: Vec<&str> = cli.claude_args.iter().map(String::as_str).collect();
-    let (cols, rows) = terminal_size::terminal_size()
-        .map(|(w, h)| (w.0, h.0))
-        .unwrap_or((80, 24));
-    tracing::info!(claude_bin = %cli.claude_bin, ?claude_args, cols, rows, "spawning PTY");
-    let pty = PtySession::spawn(&cli.claude_bin, &claude_args, cols, rows)
-        .with_context(|| format!("spawning PTY with {}", cli.claude_bin))?;
-    let pty = Arc::new(Mutex::new(pty));
-
     // Session state + pair trigger channel.
     let session = Arc::new(Mutex::new(SessionState::default()));
     let (pair_tx, mut pair_rx) = mpsc::channel::<()>(4);
 
+    // Start the RPC server BEFORE spawning the PTY so we know the listening
+    // URL ahead of time and can inject CLAUDE_PHONE_RPC_URL into the child's
+    // env. Without it the `/phone` plugin inside `claude` cannot find us.
     let rpc_state = RpcState {
         session: session.clone(),
         public_url_base: config.public_url_base.clone(),
@@ -63,6 +56,22 @@ async fn main() -> anyhow::Result<()> {
         rpc_url = %rpc_url,
         "wrapper RPC listening — POST {rpc_url}/pair to begin pairing",
     );
+
+    // Spawn the PTY so the child can boot while the user scans the QR.
+    let claude_args: Vec<&str> = cli.claude_args.iter().map(String::as_str).collect();
+    let (cols, rows) = terminal_size::terminal_size()
+        .map(|(w, h)| (w.0, h.0))
+        .unwrap_or((80, 24));
+    tracing::info!(claude_bin = %cli.claude_bin, ?claude_args, cols, rows, "spawning PTY");
+    let pty = PtySession::spawn(
+        &cli.claude_bin,
+        &claude_args,
+        cols,
+        rows,
+        &[("CLAUDE_PHONE_RPC_URL", rpc_url.as_str())],
+    )
+    .with_context(|| format!("spawning PTY with {}", cli.claude_bin))?;
+    let pty = Arc::new(Mutex::new(pty));
 
     // Track the currently-active bridge so a new /pair can preempt it before
     // taking the PTY lock. Without this, a stale bridge from a previous

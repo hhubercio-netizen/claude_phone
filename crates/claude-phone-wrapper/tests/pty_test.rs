@@ -9,7 +9,7 @@ async fn spawns_subprocess_and_reads_output() {
     } else {
         ("sh", vec!["-c", "echo hi"])
     };
-    let mut sess = PtySession::spawn(prog, &args, 80, 24).expect("spawn");
+    let mut sess = PtySession::spawn(prog, &args, 80, 24, &[]).expect("spawn");
 
     let mut collected: Vec<u8> = Vec::new();
     // Read a few chunks; the subprocess writes "hi" then exits.
@@ -38,6 +38,6 @@ async fn resize_after_spawn_returns_ok() {
     } else {
         ("sh", vec!["-c", "echo resize"])
     };
-    let sess = PtySession::spawn(prog, &args, 80, 24).expect("spawn");
+    let sess = PtySession::spawn(prog, &args, 80, 24, &[]).expect("spawn");
     assert!(sess.resize(120, 40).is_ok());
 }

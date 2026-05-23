@@ -12,7 +12,13 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    pub fn spawn(program: &str, args: &[&str], cols: u16, rows: u16) -> anyhow::Result<Self> {
+    pub fn spawn(
+        program: &str,
+        args: &[&str],
+        cols: u16,
+        rows: u16,
+        extra_env: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
         let pty_sys = native_pty_system();
         let pair = pty_sys.openpty(PtySize {
             rows,
@@ -42,6 +48,13 @@ impl PtySession {
                 continue;
             }
             cmd.env(k, v);
+        }
+        // Caller-supplied vars are injected last so they override any forwarded
+        // value. This is the *only* path by which CLAUDE_PHONE_* reaches the
+        // child — env_is_forwardable() blocks the prefix wholesale on purpose,
+        // and we re-add a specific entry (CLAUDE_PHONE_RPC_URL) here.
+        for (k, v) in extra_env {
+            cmd.env(*k, *v);
         }
 
         let child = pair.slave.spawn_command(cmd)?;
