@@ -6,33 +6,55 @@ import { claudeTheme } from './theme';
 export interface UseTerminalParams {
   onInput: (data: string) => void;
   onResize: (cols: number, rows: number) => void;
+  /** Called whenever the scroll position changes; `atBottom` is true when the
+      viewport sits flush against the latest output. Used to drive the
+      scroll-to-bottom pill. */
+  onScrollChange?: (atBottom: boolean) => void;
+  /** Initial font size in CSS pixels. Default 13. */
+  initialFontSize?: number;
 }
 
 export interface TerminalApi {
   containerRef: RefObject<HTMLDivElement>;
   write: (data: string | Uint8Array) => void;
-  resize: () => void;  // ask the fit addon to recompute size
+  resize: () => void;
   focus: () => void;
   fit: FitAddon;
+  scrollToBottom: () => void;
+  setFontSize: (px: number) => void;
 }
 
-export function useTerminal({ onInput, onResize }: UseTerminalParams): TerminalApi {
+function computeAtBottom(term: XTerm): boolean {
+  const buf = term.buffer.active;
+  // viewportY = first visible row; baseY = first row of the scrollback region.
+  // When viewportY >= baseY, the viewport is anchored to the live output.
+  return buf.viewportY >= buf.baseY;
+}
+
+export function useTerminal({
+  onInput,
+  onResize,
+  onScrollChange,
+  initialFontSize = 13,
+}: UseTerminalParams): TerminalApi {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const onInputRef = useRef(onInput);
   const onResizeRef = useRef(onResize);
+  const onScrollChangeRef = useRef(onScrollChange);
 
   // keep latest handlers without re-init xterm
   onInputRef.current = onInput;
   onResizeRef.current = onResize;
+  onScrollChangeRef.current = onScrollChange;
 
   useEffect(() => {
     if (!containerRef.current) return;
     const term = new XTerm({
       theme: claudeTheme,
       fontFamily: '"JetBrains Mono", Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: initialFontSize,
       cursorBlink: true,
       convertEol: false,
       allowProposedApi: true,
@@ -45,9 +67,18 @@ export function useTerminal({ onInput, onResize }: UseTerminalParams): TerminalA
 
     term.onData((d) => onInputRef.current(d));
     term.onResize(({ cols, rows }) => onResizeRef.current(cols, rows));
+    term.onScroll(() => {
+      onScrollChangeRef.current?.(computeAtBottom(term));
+    });
+    // Fire once so consumers start with the correct state.
+    onScrollChangeRef.current?.(computeAtBottom(term));
 
     const ro = new ResizeObserver(() => {
-      try { fit.fit(); } catch { /* term not attached yet */ }
+      try {
+        fit.fit();
+      } catch {
+        /* term not attached yet */
+      }
     });
     ro.observe(containerRef.current);
 
@@ -59,6 +90,8 @@ export function useTerminal({ onInput, onResize }: UseTerminalParams): TerminalA
       termRef.current = null;
       fitRef.current = null;
     };
+    // initialFontSize only seeds the initial render; later changes use setFontSize.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {
@@ -67,5 +100,21 @@ export function useTerminal({ onInput, onResize }: UseTerminalParams): TerminalA
     resize: () => fitRef.current?.fit(),
     focus: () => termRef.current?.focus(),
     fit: fitRef.current!,
+    scrollToBottom: () => termRef.current?.scrollToBottom(),
+    setFontSize: (px) => {
+      const term = termRef.current;
+      if (!term) return;
+      // Clamp to a sensible range. Below 10 is unreadable, above 22 fits
+      // almost no useful content on a phone width.
+      const clamped = Math.max(10, Math.min(22, Math.round(px)));
+      term.options.fontSize = clamped;
+      // Re-fit so cols/rows reflect the new cell size and the wrapper sees
+      // an accurate resize.
+      try {
+        fitRef.current?.fit();
+      } catch {
+        /* not attached */
+      }
+    },
   };
 }

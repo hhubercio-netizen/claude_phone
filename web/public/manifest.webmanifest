@@ -1,11 +1,20 @@
 {
   "name": "Claude Phone",
-  "short_name": "Claude Phone",
+  "short_name": "Claude",
+  "description": "Mobile bridge to a Claude Code terminal session.",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "orientation": "any",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
+  "lang": "en",
   "icons": [
-    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
   ]
 }

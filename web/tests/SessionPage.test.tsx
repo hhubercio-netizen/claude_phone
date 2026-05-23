@@ -231,7 +231,18 @@ describe('SessionPage', () => {
     expect(document.title).not.toContain(VALID_TOKEN);
     // The store must not persist the token (only serverSessionId + peerConnected).
     expect(useSessionStore.getState().token).toBeNull();
-    expect(Object.keys(localStorage)).toHaveLength(0);
-    expect(Object.keys(sessionStorage)).toHaveLength(0);
+    // localStorage may contain non-secret UI preferences (e.g. font size).
+    // Assert that no key or value EVER contains the raw token, rather than
+    // that the storages are empty.
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)!;
+      expect(k).not.toContain(VALID_TOKEN);
+      expect(localStorage.getItem(k) ?? '').not.toContain(VALID_TOKEN);
+    }
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i)!;
+      expect(k).not.toContain(VALID_TOKEN);
+      expect(sessionStorage.getItem(k) ?? '').not.toContain(VALID_TOKEN);
+    }
   });
 });

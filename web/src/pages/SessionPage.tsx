@@ -1,9 +1,13 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActionBar } from '../components/ActionBar/ActionBar';
 import { MobileLayout } from '../components/Layout/MobileLayout';
+import { PasteModal } from '../components/PasteModal/PasteModal';
 import { Terminal } from '../components/Terminal/Terminal';
+import type { TerminalHandle } from '../components/Terminal/Terminal';
+import { useFontSize } from '../hooks/useFontSize';
 import { useReconnectingWebSocket } from '../hooks/useReconnect';
+import { useWakeLock } from '../hooks/useWakeLock';
 import { useSessionStore } from '../store/session';
 import type { ControlMessage } from '../lib/protocol';
 
@@ -31,10 +35,18 @@ export function SessionPage() {
   const setServerSessionId = useSessionStore((s) => s.setServerSessionId);
 
   const writeRef = useRef<((bytes: Uint8Array) => void) | null>(null);
+  const termHandleRef = useRef<TerminalHandle | null>(null);
 
   const tokenValid = isValidToken(token);
   const url = tokenValid ? gatewayWsUrl(token) : null;
   const { state, client, on } = useReconnectingWebSocket(url);
+
+  const font = useFontSize();
+  const [pasteOpen, setPasteOpen] = useState(false);
+
+  // Hold the screen on while a valid session page is mounted. The hook is a
+  // no-op on browsers without the Wake Lock API.
+  useWakeLock(tokenValid);
 
   // Send phone_hello after EVERY open — the reconnecting hook re-opens the WS
   // on backoff after network blips, and the gateway expects phone_hello to be
@@ -84,31 +96,99 @@ export function SessionPage() {
     client?.sendControl({ type: 'resize', cols, rows });
   }
 
+  function handlePasteSend(bytes: Uint8Array) {
+    // Route through the same WS as keystrokes. Gateway treats it as plain
+    // binary input to the wrapper PTY — identical to a fast typist.
+    handleInput(bytes);
+  }
+
   return (
-    <MobileLayout
-      header={<ConnectionStatus state={state} />}
-      body={
-        <Terminal
-          onInputBytes={handleInput}
-          onResize={handleResize}
-          writeHandle={(w) => (writeRef.current = w)}
-        />
-      }
-      footer={<ActionBar onKey={handleInput} />}
-    />
+    <>
+      <MobileLayout
+        header={
+          <SessionHeader
+            wsState={state}
+            fontSize={font.size}
+            onFontInc={font.inc}
+            onFontDec={font.dec}
+            onPaste={() => setPasteOpen(true)}
+          />
+        }
+        body={
+          <Terminal
+            onInputBytes={handleInput}
+            onResize={handleResize}
+            writeHandle={(w) => (writeRef.current = w)}
+            controlHandle={(h) => (termHandleRef.current = h)}
+            fontSize={font.size}
+          />
+        }
+        footer={<ActionBar onKey={handleInput} />}
+      />
+      <PasteModal
+        open={pasteOpen}
+        onClose={() => setPasteOpen(false)}
+        onSend={handlePasteSend}
+      />
+    </>
   );
 }
 
-function ConnectionStatus({ state }: { state: string }) {
+interface HeaderProps {
+  wsState: string;
+  fontSize: number;
+  onFontInc: () => void;
+  onFontDec: () => void;
+  onPaste: () => void;
+}
+
+function SessionHeader({ wsState, fontSize, onFontInc, onFontDec, onPaste }: HeaderProps) {
   const peer = useSessionStore((s) => s.peerConnected);
   return (
-    <header className="px-3 py-1 border-b border-claude-panelBorder text-xs flex justify-between">
-      <span>
-        WS: <span className={state === 'open' ? 'text-claude-ok' : 'text-claude-err'}>{state}</span>
-      </span>
-      <span>
-        Wrapper: {peer ? <span className="text-claude-ok">paired</span> : <span className="text-claude-muted">waiting</span>}
-      </span>
+    <header className="px-3 py-1 border-b border-claude-panelBorder text-xs flex justify-between items-center gap-2">
+      <div className="flex items-center gap-3 min-w-0">
+        <span>
+          WS:{' '}
+          <span className={wsState === 'open' ? 'text-claude-ok' : 'text-claude-err'}>
+            {wsState}
+          </span>
+        </span>
+        <span className="truncate">
+          Wrapper:{' '}
+          {peer ? (
+            <span className="text-claude-ok">paired</span>
+          ) : (
+            <span className="text-claude-muted">waiting</span>
+          )}
+        </span>
+      </div>
+      <div className="flex items-center gap-1">
+        <HeaderBtn label="A−" onClick={onFontDec} ariaLabel="Decrease font size" />
+        <span className="text-claude-muted tabular-nums w-6 text-center">{fontSize}</span>
+        <HeaderBtn label="A+" onClick={onFontInc} ariaLabel="Increase font size" />
+        <HeaderBtn label="Paste" onClick={onPaste} ariaLabel="Open paste dialog" />
+      </div>
     </header>
+  );
+}
+
+function HeaderBtn({
+  label,
+  onClick,
+  ariaLabel,
+}: {
+  label: string;
+  onClick: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      className="px-2 py-0.5 rounded border border-claude-panelBorder bg-claude-panelBg text-claude-fg active:bg-claude-panelBorder text-xs"
+    >
+      {label}
+    </button>
   );
 }

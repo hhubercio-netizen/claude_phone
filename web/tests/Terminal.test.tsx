@@ -9,9 +9,16 @@ class FakeXTerm {
   written: (string | Uint8Array)[] = [];
   onDataCb: ((d: string) => void) | null = null;
   onResizeCb: ((s: { cols: number; rows: number }) => void) | null = null;
+  onScrollCb: (() => void) | null = null;
   disposed = false;
   focused = false;
   opened = false;
+  scrollToBottomCalls = 0;
+  // The buffer state used by useTerminal.computeAtBottom — by default the
+  // viewport is anchored at the latest output (viewportY >= baseY).
+  buffer = {
+    active: { viewportY: 0, baseY: 0, length: 0 },
+  };
 
   constructor(options: Record<string, unknown>) {
     this.options = options;
@@ -27,6 +34,9 @@ class FakeXTerm {
   onResize(cb: (s: { cols: number; rows: number }) => void): void {
     this.onResizeCb = cb;
   }
+  onScroll(cb: () => void): void {
+    this.onScrollCb = cb;
+  }
   write(data: string | Uint8Array): void {
     this.written.push(data);
   }
@@ -35,6 +45,10 @@ class FakeXTerm {
   }
   dispose(): void {
     this.disposed = true;
+  }
+  scrollToBottom(): void {
+    this.scrollToBottomCalls += 1;
+    this.buffer.active.viewportY = this.buffer.active.baseY;
   }
 }
 
