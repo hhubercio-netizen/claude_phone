@@ -735,7 +735,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-CODE.3  | `panic!` / `unwrap` / `expect` audit in hot paths (tests-only allowed)                       | TODO   |
 | TM-CODE.4  | TOCTOU sweep in `session/registry.rs` (insert/check/use sequences)                          | GREEN  |
 | TM-CODE.5  | Channel back-pressure verify: no unbounded channels in hot paths; bounded with timeout      | TODO   |
-| TM-CODE.6  | Integer overflow: bounds on `session_idle_timeout_secs`, `max_sessions`; `cols`/`rows` u16 OK | TODO |
+| TM-CODE.6  | Integer overflow: bounds on `session_idle_timeout_secs`, `max_sessions`; `cols`/`rows` u16 OK | GREEN |
 | TM-CODE.7  | Workspace `cargo fmt --check` clean                                                          | GREEN  |
 
 ### Testing (TM-TEST)

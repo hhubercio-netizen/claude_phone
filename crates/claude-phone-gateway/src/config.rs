@@ -51,6 +51,17 @@ fn default_max_sessions() -> usize {
     100
 }
 
+// TM-CODE.6: documented operational ranges for config-loaded numeric fields.
+// Below the min the service is functionally broken; above the max the values
+// invite memory or runtime pathologies (e.g., Duration::from_secs(u64::MAX)
+// effectively disables the sweeper; usize::MAX-sized DashMap defeats the
+// memory cap). The gateway fails closed at load time rather than producing
+// surprising runtime behaviour.
+const MIN_SESSION_IDLE_SECS: u64 = 60;
+const MAX_SESSION_IDLE_SECS: u64 = 30 * 24 * 60 * 60;
+const MIN_MAX_SESSIONS: usize = 1;
+const MAX_MAX_SESSIONS: usize = 10_000;
+
 impl GatewayConfig {
     /// Backwards-compatible accessor returning the typed api keys. Kept so
     /// older call sites still compile; new code can read the field directly.
@@ -58,9 +69,40 @@ impl GatewayConfig {
         Ok(self.api_keys.clone())
     }
 
+    /// Validate config values that cannot be enforced by serde alone.
+    /// Called automatically from [`load`]. Returns the first violation; if
+    /// multiple fields are out of range, the operator fixes them one by one
+    /// in subsequent restarts.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        // TM-CODE.6: session_idle_timeout_secs in [60, 30 days].
+        if self.session_idle_timeout_secs < MIN_SESSION_IDLE_SECS
+            || self.session_idle_timeout_secs > MAX_SESSION_IDLE_SECS
+        {
+            anyhow::bail!(
+                "session_idle_timeout_secs={} is outside the operational range \
+                 [{}, {}] (TM-CODE.6). Refusing to start.",
+                self.session_idle_timeout_secs,
+                MIN_SESSION_IDLE_SECS,
+                MAX_SESSION_IDLE_SECS
+            );
+        }
+        // TM-CODE.6: max_sessions in [1, 10_000].
+        if self.max_sessions < MIN_MAX_SESSIONS || self.max_sessions > MAX_MAX_SESSIONS {
+            anyhow::bail!(
+                "max_sessions={} is outside the operational range [{}, {}] \
+                 (TM-CODE.6). Refusing to start.",
+                self.max_sessions,
+                MIN_MAX_SESSIONS,
+                MAX_MAX_SESSIONS
+            );
+        }
+        Ok(())
+    }
+
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)?;
         let cfg: Self = toml::from_str(&raw)?;
+        cfg.validate()?;
         Ok(cfg)
     }
 }
