@@ -123,7 +123,7 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
 
     {
         let mut slot = handle.session.to_phone.lock().await;
-        *slot = None;
+        slot.detach();
     }
     let peer_down = ControlMessage::PeerStatus(PeerStatus { connected: false });
     let _ = handle

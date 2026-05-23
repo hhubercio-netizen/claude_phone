@@ -3,7 +3,8 @@ use std::pin::Pin;
 use futures::{SinkExt, Stream};
 use tokio_tungstenite::tungstenite::Message;
 
-use claude_phone_shared::protocol::{ControlMessage, PeerStatus, Resize};
+use claude_phone_shared::protocol::{ControlMessage, Resize};
+use tokio::sync::oneshot;
 
 use crate::gateway_client::GatewayClient;
 use crate::pty::PtySession;
@@ -41,8 +42,24 @@ pub trait BridgePty: Send + Unpin {
     fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()>;
 }
 
-/// Generic bridge loop. Returns when either side closes.
-pub async fn run<S, K, P>(mut stream: S, mut sink: K, mut pty: P) -> anyhow::Result<()>
+/// Generic bridge loop. Returns when either side closes or `shutdown` fires.
+///
+/// `shutdown` is preempt-only: when `main` accepts a new `/pair` it needs to
+/// release the PTY lock held by the previous bridge before the new one can
+/// take it. Triggering `shutdown` makes this loop drop the lock without
+/// killing the underlying PTY (which is owned by `Arc<Mutex<PtySession>>`
+/// in `main`).
+///
+/// `PeerStatus::connected = false` does NOT terminate the bridge — the
+/// session must remain live so the phone can return to the same link and
+/// reattach. Buffering of output while no phone is attached happens in the
+/// gateway, not here.
+pub async fn run<S, K, P>(
+    mut stream: S,
+    mut sink: K,
+    mut pty: P,
+    mut shutdown: oneshot::Receiver<()>,
+) -> anyhow::Result<()>
 where
     S: BridgeStream,
     K: BridgeSink,
@@ -50,6 +67,8 @@ where
 {
     loop {
         tokio::select! {
+            biased;
+            _ = &mut shutdown => break,
             chunk = pty.read_chunk() => {
                 let Some(bytes) = chunk else { break };
                 if sink.send_frame(BridgeFrame::Binary(bytes)).await.is_err() {
@@ -63,18 +82,10 @@ where
                         let _ = pty.write_chunk(&b).await;
                     }
                     BridgeFrame::Text(t) => {
-                        match serde_json::from_str::<ControlMessage>(&t) {
-                            Ok(ControlMessage::Resize(Resize { cols, rows })) => {
-                                let _ = pty.resize(cols, rows);
-                            }
-                            // Phone disconnected. Exit the bridge so main can
-                            // accept the next /pair. PTY (and its child) stays
-                            // alive because the lock is released, not the
-                            // PtySession itself.
-                            Ok(ControlMessage::PeerStatus(PeerStatus {
-                                connected: false,
-                            })) => break,
-                            _ => {}
+                        if let Ok(ControlMessage::Resize(Resize { cols, rows })) =
+                            serde_json::from_str::<ControlMessage>(&t)
+                        {
+                            let _ = pty.resize(cols, rows);
                         }
                     }
                     BridgeFrame::Ping(p) => {
@@ -165,15 +176,18 @@ impl BridgePty for PtyGuardAdapter {
     }
 }
 
-/// Backwards-compatible entry point used by `main.rs`.
+/// Backwards-compatible entry point used by `main.rs`. `shutdown` lets the
+/// caller preempt the bridge so a new `/pair` can take the PTY lock that this
+/// bridge currently holds.
 pub async fn run_via_locked(
     client: GatewayClient,
     pty_guard: tokio::sync::OwnedMutexGuard<PtySession>,
+    shutdown: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let stream = GatewayStreamAdapter {
         inner: client.stream,
     };
     let sink = GatewaySinkAdapter { inner: client.sink };
     let pty = PtyGuardAdapter { guard: pty_guard };
-    run(stream, sink, pty).await
+    run(stream, sink, pty, shutdown).await
 }

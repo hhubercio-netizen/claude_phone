@@ -94,8 +94,21 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
                 Message::Close(_) => break,
                 _ => continue,
             };
-            let slot = session_outgoing.to_phone.lock().await;
-            if let Some(tx) = slot.as_ref() {
+            // Snapshot the sender under the lock, then release before the
+            // potentially-blocking send. If no phone is attached, binary frames
+            // go to the replay buffer; text frames are dropped (they are
+            // transient control signals that would be confusing to replay).
+            let sender_opt = {
+                let mut slot = session_outgoing.to_phone.lock().await;
+                let s = slot.sender();
+                if s.is_none() {
+                    if let Frame::Binary(bytes) = &frame {
+                        slot.push_buffered(bytes.clone());
+                    }
+                }
+                s
+            };
+            if let Some(tx) = sender_opt {
                 let _ = tx.send(frame).await;
             }
         }

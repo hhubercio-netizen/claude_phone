@@ -3,7 +3,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use claude_phone_wrapper::bridge::{run, BridgeFrame, BridgePty, BridgeSink, BridgeStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 struct FakeStream {
     rx: mpsc::UnboundedReceiver<BridgeFrame>,
@@ -58,6 +58,8 @@ struct Harness {
     stream: FakeStream,
     sink: FakeSink,
     pty: FakePty,
+    shutdown_tx: oneshot::Sender<()>,
+    shutdown_rx: oneshot::Receiver<()>,
 }
 
 fn setup() -> Harness {
@@ -65,6 +67,7 @@ fn setup() -> Harness {
     let (sink_tx, sink_rx) = mpsc::unbounded_channel();
     let (pty_in_tx, pty_in_rx) = mpsc::unbounded_channel();
     let (pty_out_tx, pty_out_rx) = mpsc::unbounded_channel();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let resize = std::sync::Arc::new(std::sync::Mutex::new(None));
     let stream = FakeStream { rx: stream_rx };
     let sink = FakeSink { tx: sink_tx };
@@ -82,6 +85,8 @@ fn setup() -> Harness {
         stream,
         sink,
         pty,
+        shutdown_tx,
+        shutdown_rx,
     }
 }
 
@@ -92,7 +97,7 @@ async fn pty_bytes_forwarded_as_binary_frame() {
     h.pty_in_tx.send(None).unwrap();
 
     let mut sink_rx = h.sink_rx;
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     let frame = sink_rx.recv().await.expect("sink got frame");
     assert_eq!(frame, BridgeFrame::Binary(b"abc".to_vec()));
     handle.await.unwrap().unwrap();
@@ -107,7 +112,7 @@ async fn ws_binary_forwarded_to_pty_write() {
     h.stream_tx.send(BridgeFrame::Close).unwrap();
 
     let mut pty_out_rx = h.pty_out_rx;
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     let written = pty_out_rx.recv().await.expect("pty got write");
     assert_eq!(written, b"xyz");
     handle.await.unwrap().unwrap();
@@ -121,7 +126,7 @@ async fn resize_text_dispatched_to_pty_resize() {
     h.stream_tx.send(BridgeFrame::Close).unwrap();
 
     let resize = h.resize.clone();
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     handle.await.unwrap().unwrap();
     assert_eq!(*resize.lock().unwrap(), Some((100, 40)));
 }
@@ -133,7 +138,7 @@ async fn ping_replied_with_pong() {
     h.stream_tx.send(BridgeFrame::Close).unwrap();
 
     let mut sink_rx = h.sink_rx;
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     let frame = sink_rx.recv().await.expect("got pong");
     assert_eq!(frame, BridgeFrame::Pong(b"x".to_vec()));
     handle.await.unwrap().unwrap();
@@ -143,7 +148,7 @@ async fn ping_replied_with_pong() {
 async fn close_frame_terminates_run() {
     let h = setup();
     h.stream_tx.send(BridgeFrame::Close).unwrap();
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     handle.await.unwrap().unwrap();
 }
 
@@ -151,38 +156,63 @@ async fn close_frame_terminates_run() {
 async fn pty_eof_terminates_run() {
     let h = setup();
     h.pty_in_tx.send(None).unwrap();
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     handle.await.unwrap().unwrap();
 }
 
 #[tokio::test]
-async fn peer_disconnect_terminates_run() {
-    // When the phone goes away, the gateway sends `peer_status: connected=false`
-    // as a text frame. The bridge must exit so main can release the PTY lock
-    // and accept the next /pair. Without this, the wrapper deadlocks after the
-    // first phone disconnect.
+async fn peer_disconnect_does_not_terminate_run() {
+    // Sticky session model: when the phone goes away the gateway sends
+    // `peer_status: connected=false`. The bridge MUST keep the PTY live so
+    // the phone can re-enter the same link and pick up where it left off.
+    // Output produced during the disconnect window is buffered in the
+    // gateway (PhoneChannel) and replayed on reattach.
     let h = setup();
     let peer_down = r#"{"type":"peer_status","connected":false}"#.to_string();
     h.stream_tx.send(BridgeFrame::Text(peer_down)).unwrap();
-    // No explicit Close after — the bridge must exit on its own.
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    // The bridge should still be alive after this; close out via shutdown.
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
+
+    // Give it a moment to process the text frame; it must NOT exit yet.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!handle.is_finished(), "bridge exited on peer_disconnect");
+
+    // Now actually shut it down so the test ends.
+    let _ = h.shutdown_tx.send(());
     tokio::time::timeout(std::time::Duration::from_secs(2), handle)
         .await
-        .expect("bridge did not exit on peer_disconnect")
+        .expect("bridge did not exit on shutdown")
         .unwrap()
         .unwrap();
 }
 
 #[tokio::test]
 async fn peer_connect_does_not_terminate() {
-    // The complementary signal — phone joining — must NOT end the bridge.
     let h = setup();
     let peer_up = r#"{"type":"peer_status","connected":true}"#.to_string();
     h.stream_tx.send(BridgeFrame::Text(peer_up)).unwrap();
-    // Drop the stream by sending Close so the test terminates.
     h.stream_tx.send(BridgeFrame::Close).unwrap();
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_signal_terminates_run() {
+    // Main triggers this when a new /pair arrives and the previous bridge
+    // is still holding the PTY lock. Without this preemption hook the new
+    // bridge would deadlock waiting for the lock.
+    let h = setup();
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
+    // Bridge should be idle.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(!handle.is_finished());
+
+    let _ = h.shutdown_tx.send(());
+    tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("bridge did not exit on shutdown")
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -193,7 +223,7 @@ async fn malformed_text_does_not_crash() {
         .unwrap();
     h.stream_tx.send(BridgeFrame::Close).unwrap();
     let resize = h.resize.clone();
-    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty, h.shutdown_rx));
     handle.await.unwrap().unwrap();
     assert!(resize.lock().unwrap().is_none());
 }

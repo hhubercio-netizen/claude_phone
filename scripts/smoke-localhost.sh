@@ -103,4 +103,8 @@ log "got token (length=${#TOKEN})"
 
 log "running scripts/smoke-phone.mjs"
 PHONE_TOKEN="$TOKEN" node scripts/smoke-phone.mjs
-log "OK — end-to-end smoke passed"
+log "smoke-phone OK"
+
+log "running scripts/smoke-reconnect.mjs (sticky session)"
+PHONE_TOKEN="$TOKEN" node scripts/smoke-reconnect.mjs
+log "OK — end-to-end smoke + reconnect passed"

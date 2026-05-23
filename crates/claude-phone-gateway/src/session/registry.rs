@@ -73,15 +73,18 @@ impl SessionRegistry {
             .clone();
 
         let (tx_to_phone, rx_from_wrapper) = mpsc::channel::<Frame>(256);
-        {
+        let replayed = {
             let mut slot = session.to_phone.lock().await;
-            if slot.is_some() {
+            if slot.is_attached() {
                 // A phone is already attached. Refuse the new one rather than
                 // silently stealing the session — prevents takeover by anyone
                 // who knows the token while the original holder is connected.
                 return Err(GatewayError::SessionTaken);
             }
-            *slot = Some(tx_to_phone);
+            slot.attach_and_replay(tx_to_phone)
+        };
+        if replayed > 0 {
+            tracing::debug!(replayed, "replayed buffered frames to phone");
         }
 
         Ok(PhoneHandle {
