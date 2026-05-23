@@ -17,6 +17,8 @@ use claude_phone_gateway::{
     serve,
 };
 use claude_phone_shared::{ApiKey, SessionToken};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
@@ -97,6 +99,113 @@ fn expect_http_status(
         tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
         other => panic!("expected Http error, got: {other:?}"),
     }
+}
+
+/// Parsed HTTP response of a raw-TCP WebSocket upgrade. The fields hold
+/// only what the TM-WS.8 / TM-WS.12 assertions need: the status line and
+/// a lowercase-keyed map of headers. Used to bypass tungstenite's strict
+/// client-side validation of `Sec-WebSocket-Protocol` and let the test
+/// inspect what the server actually sent.
+struct RawUpgradeResponse {
+    status: u16,
+    headers: Vec<(String, String)>,
+}
+
+impl RawUpgradeResponse {
+    fn header(&self, name: &str) -> Option<&str> {
+        let lname = name.to_ascii_lowercase();
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&lname))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// Drive a raw WebSocket upgrade over plain TCP and return the parsed
+/// 101 response. tungstenite 0.24 fails the client-side handshake when
+/// the client offered `Sec-WebSocket-Protocol` but the server didn't
+/// echo one back (RFC 6455 §4.1 "MUST" wording is interpreted strictly).
+/// Our server intentionally never echoes one (TM-WS.12), so the only
+/// way to assert on the response headers is to bypass the strict client.
+///
+/// The Sec-WebSocket-Key value below is the RFC 6455 §1.2 sample nonce;
+/// the server doesn't validate its entropy, only that it parses as a
+/// 16-byte base64 string and that the resulting Sec-WebSocket-Accept is
+/// computed correctly on its side.
+async fn raw_ws_upgrade(
+    port: u16,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+) -> RawUpgradeResponse {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("tcp connect");
+
+    let mut req = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n"
+    );
+    for (k, v) in extra_headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    stream.write_all(req.as_bytes()).await.expect("write req");
+
+    // Read until end-of-headers marker. WS 101 has an empty body so
+    // \r\n\r\n is also the end of the parseable portion. Cap the read
+    // window at 32 KiB — way more than the production response which
+    // is well under 2 KiB even with all security headers.
+    let mut buf = Vec::with_capacity(2048);
+    let mut chunk = [0u8; 1024];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while buf.windows(4).all(|w| w != b"\r\n\r\n") {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let n = tokio::time::timeout(remaining, stream.read(&mut chunk))
+            .await
+            .expect("response within 2s")
+            .expect("read");
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > 32 * 1024 {
+            panic!("response headers exceeded 32 KiB before terminator");
+        }
+    }
+
+    // The phone WS route sends a binary Close frame immediately after the
+    // 101 (no matching session for the synthetic token), so the bytes
+    // *after* \r\n\r\n are not valid UTF-8. Slice the header window only.
+    let end = buf
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .expect("end-of-headers marker present");
+    let header_window = &buf[..end];
+    let text = std::str::from_utf8(header_window).expect("response headers are utf-8");
+    let mut lines = text.split("\r\n");
+    let status_line = lines.next().expect("status line");
+    let mut parts = status_line.split(' ');
+    let _http_version = parts.next().expect("http version");
+    let status: u16 = parts
+        .next()
+        .expect("status code")
+        .parse()
+        .expect("status u16");
+
+    let mut headers = Vec::new();
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_string(), value.trim().to_string()));
+        }
+    }
+    RawUpgradeResponse { status, headers }
 }
 
 /// TM-WS.3 — Phone WS MUST refuse the upgrade with 403 when
@@ -184,5 +293,114 @@ async fn phone_ws_rejects_wrong_origin() {
         expect_http_status(err).as_u16(),
         403,
         "TM-WS.2: wrong Origin on phone_ws must yield 403"
+    );
+}
+
+// --- TM-WS.8 — permessage-deflate compression must never be negotiated ----
+
+/// TM-WS.8 — Phone WS MUST NOT advertise `permessage-deflate` in its
+/// 101 response even when the client offers it. Compression over tiny
+/// PTY frames + attacker-controlled content is the classic CRIME/BREACH
+/// oracle shape; we never want it on. The default axum behaviour is
+/// "don't negotiate", and this test pins that default so a future
+/// `WebSocketUpgrade::with_compression(true)`-style call would flip CI red.
+#[tokio::test]
+async fn compression_extension_not_negotiated_phone() {
+    let (port, _key) = spawn_gateway(None).await;
+    let token = SessionToken::generate();
+    let path = format!("/api/phone/{}", token.as_str());
+
+    let response = raw_ws_upgrade(
+        port,
+        &path,
+        &[("Sec-WebSocket-Extensions", "permessage-deflate")],
+    )
+    .await;
+    assert_eq!(response.status, 101, "expected 101 upgrade");
+    let extensions = response
+        .header("sec-websocket-extensions")
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    assert!(
+        !extensions.contains("permessage-deflate"),
+        "TM-WS.8: server MUST NOT negotiate permessage-deflate; got: {extensions:?}"
+    );
+}
+
+/// TM-WS.8 — same check on the wrapper route. Asymmetric guards table at
+/// 4.13 sub-spec §1.3 keeps both routes symmetric on compression: both
+/// must refuse, both have this test.
+#[tokio::test]
+async fn compression_extension_not_negotiated_wrapper() {
+    let (port, _key) = spawn_gateway(None).await;
+
+    let response = raw_ws_upgrade(
+        port,
+        "/api/wrapper",
+        &[("Sec-WebSocket-Extensions", "permessage-deflate")],
+    )
+    .await;
+    assert_eq!(response.status, 101, "expected 101 upgrade");
+    let extensions = response
+        .header("sec-websocket-extensions")
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    assert!(
+        !extensions.contains("permessage-deflate"),
+        "TM-WS.8: wrapper server MUST NOT negotiate permessage-deflate; got: {extensions:?}"
+    );
+}
+
+// --- TM-WS.12 — Sec-WebSocket-Protocol must never be negotiated -----------
+
+/// TM-WS.12 — Phone WS MUST NOT echo a `Sec-WebSocket-Protocol` header
+/// in its 101 response, regardless of what the client offered. We do not
+/// version the protocol via subprotocols today; any future change that
+/// does must introduce explicit strict-match negotiation, audited
+/// separately. This test catches a future contributor calling
+/// `WebSocketUpgrade::protocols(...)` and silently negotiating the
+/// first client-offered value.
+///
+/// Driven via raw TCP because tungstenite 0.24 fails the client-side
+/// handshake when the client offered a subprotocol but the server
+/// didn't echo one — that is exactly the path we want to assert on, so
+/// we bypass the strict client and read the 101 headers ourselves.
+#[tokio::test]
+async fn subprotocol_not_negotiated_phone() {
+    let (port, _key) = spawn_gateway(None).await;
+    let token = SessionToken::generate();
+    let path = format!("/api/phone/{}", token.as_str());
+
+    let response = raw_ws_upgrade(
+        port,
+        &path,
+        &[("Sec-WebSocket-Protocol", "claude-phone-v0, chat-v1")],
+    )
+    .await;
+    assert_eq!(response.status, 101, "expected 101 upgrade");
+    assert!(
+        response.header("sec-websocket-protocol").is_none(),
+        "TM-WS.12: server MUST NOT select a subprotocol; got: {:?}",
+        response.header("sec-websocket-protocol")
+    );
+}
+
+/// TM-WS.12 — same check on the wrapper route. Both routes share the
+/// "no subprotocol negotiation" baseline per §1.3 asymmetric-guard table.
+#[tokio::test]
+async fn subprotocol_not_negotiated_wrapper() {
+    let (port, _key) = spawn_gateway(None).await;
+
+    let response = raw_ws_upgrade(
+        port,
+        "/api/wrapper",
+        &[("Sec-WebSocket-Protocol", "claude-phone-v0, chat-v1")],
+    )
+    .await;
+    assert_eq!(response.status, 101, "expected 101 upgrade");
+    assert!(
+        response.header("sec-websocket-protocol").is_none(),
+        "TM-WS.12: wrapper server MUST NOT select a subprotocol; got: {:?}",
+        response.header("sec-websocket-protocol")
     );
 }
