@@ -610,8 +610,8 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
-| TM-TLS.1   | TLS 1.3 only at Caddy edge                                                                  | TODO   |
-| TM-TLS.2   | Strict-Transport-Security `max-age=63072000; includeSubDomains; preload`                    | GREEN  |
+| TM-TLS.1   | TLS 1.3 only at Caddy edge                                                                  | GREEN (deploy/caddy/Caddyfile `protocols tls1.3`) |
+| TM-TLS.2   | Strict-Transport-Security `max-age=63072000; includeSubDomains; preload`                    | GREEN (aligned across gateway http.rs and Caddy)  |
 | TM-TLS.3   | HSTS preload registry submission (manual ops, after 30 d clean)                             | DEFER  |
 | TM-TLS.4   | CT monitoring via crt.sh alerts on `claude-phone.pl`                                        | TODO   |
 | TM-TLS.5   | Referrer-Policy `no-referrer`                                                               | GREEN  |

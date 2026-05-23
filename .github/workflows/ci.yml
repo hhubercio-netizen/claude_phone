@@ -41,6 +41,22 @@ jobs:
         run: cargo install --locked cargo-audit
       - run: cargo audit --deny warnings
 
+  caddyfile:
+    name: Caddyfile validate (TM-TLS.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Caddy
+        run: |
+          set -euxo pipefail
+          curl -fsSL -o /tmp/caddy.tar.gz \
+            https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz
+          sudo tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
+          sudo chmod +x /usr/local/bin/caddy
+          caddy version
+      - name: Validate Caddyfile
+        run: caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
+
   cargo-deny:
     name: cargo deny (TM-SUPPLY.4)
     runs-on: ubuntu-latest

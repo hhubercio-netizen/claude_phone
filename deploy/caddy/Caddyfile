@@ -6,7 +6,12 @@
 }
 
 claude-phone.pl:443 {
-    tls /etc/caddy/cert.pem /etc/caddy/key.pem
+    # TM-TLS.1 — lock the version to 1.3. Modern browsers (Chrome >= 70,
+    # Firefox >= 63, Safari >= 12.1, Edge >= 79) all negotiate 1.3; 1.2 is
+    # only useful for IE 11 / Android < 5, neither of which we target.
+    tls /etc/caddy/cert.pem /etc/caddy/key.pem {
+        protocols tls1.3
+    }
 
     # API endpoints — WebSocket upgrades, pass-through to gateway
     @websocket {
@@ -33,7 +38,10 @@ claude-phone.pl:443 {
     encode gzip zstd
 
     header {
-        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        # TM-TLS.2 — align with gateway http.rs (2 years + preload). Browsers
+        # cache the highest HSTS policy seen, so any layer advertising a
+        # weaker value silently weakens defense-in-depth.
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
         Referrer-Policy "no-referrer"
         X-Content-Type-Options "nosniff"
         X-Frame-Options "DENY"
