@@ -21,6 +21,9 @@ Thumbs.db
 .env
 .env.local
 config.local.toml
+# Local dev configs hold an api_key — keep them out of git on purpose.
+# Use scripts/smoke-localhost.sh to regenerate when needed.
+*-dev.toml
 
 # Logs
 *.log

@@ -36,6 +36,25 @@ npm run build
 Use `bash` as a stand-in for `claude` to exercise the bridge without needing a
 real Claude Code session.
 
+### Quickest: one-shot script
+
+```bash
+./scripts/smoke-localhost.sh
+```
+
+Spawns gateway + wrapper, pairs once, runs `scripts/smoke-phone.mjs` which
+simulates a phone-side WebSocket client, types `ls /; echo MARKER` into bash,
+and asserts the marker echoes back through the bridge. Exits 0 on success,
+non-zero with diagnostic logs on failure. Cleans up both background processes
+on exit.
+
+The script writes `gateway-dev.toml` and `wrapper-dev.toml` in the repo root
+(both gitignored) with a freshly generated API key.
+
+### Manual walkthrough
+
+If you want to drive each piece by hand:
+
 ### 1. Generate a test API key
 
 ```bash
