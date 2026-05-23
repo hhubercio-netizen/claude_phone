@@ -404,3 +404,252 @@ async fn subprotocol_not_negotiated_wrapper() {
         response.header("sec-websocket-protocol")
     );
 }
+
+// --- TM-WS.7 / TM-WS.10 — asymmetry pins (4.6 implements; 4.13 verifies) --
+
+/// TM-WS.10 — Both routes MUST close the socket inside `HEADER_READ_TIMEOUT`
+/// when the client never finishes the request headers (classic slow-loris).
+/// 4.6 wired `header_read_timeout(Some(10 s))` into the hyper builder; this
+/// test asserts the timeout fires for BOTH URL paths within the same window,
+/// so a future refactor that mounts one route on a different server / builder
+/// can't quietly desync the timeout.
+#[tokio::test]
+async fn both_routes_close_on_slow_loris_headers() {
+    let (port, _key) = spawn_gateway(None).await;
+    let token = SessionToken::generate();
+    let phone_path = format!("/api/phone/{}", token.as_str());
+
+    let routes: [(&str, &str); 2] = [("/api/wrapper", "wrapper"), (phone_path.as_str(), "phone")];
+
+    let mut elapsed = Vec::new();
+    for (path, name) in routes {
+        let start = std::time::Instant::now();
+        let mut stream = TcpStream::connect(("127.0.0.1", port))
+            .await
+            .expect("tcp connect");
+        // Partial request: request line + one header, NO terminating
+        // \r\n\r\n. The server must hit HEADER_READ_TIMEOUT and close.
+        let prefix = format!(
+            "GET {path} HTTP/1.1\r\n\
+             Host: 127.0.0.1:{port}\r\n"
+        );
+        stream
+            .write_all(prefix.as_bytes())
+            .await
+            .expect("write partial headers");
+
+        // Drain until the server half-closes. Wrap in a hard ceiling so
+        // a regression that drops the timeout doesn't hang CI for hours.
+        let mut sink = [0u8; 1024];
+        loop {
+            let n = tokio::time::timeout(Duration::from_secs(30), stream.read(&mut sink))
+                .await
+                .unwrap_or_else(|_| panic!("TM-WS.10 ({name}): no close within 30 s"))
+                .expect("read");
+            if n == 0 {
+                break;
+            }
+        }
+        elapsed.push((name, start.elapsed()));
+    }
+
+    let (wrapper_name, wrapper_t) = elapsed[0];
+    let (phone_name, phone_t) = elapsed[1];
+
+    // HEADER_READ_TIMEOUT = 10 s; allow +5 s for hyper scheduling + Windows
+    // TCP teardown jitter. Floor at 5 s so a regression that drops the
+    // timeout entirely (close-on-FIN immediately) also trips the assert.
+    let upper = Duration::from_secs(15);
+    let lower = Duration::from_secs(5);
+    assert!(
+        wrapper_t <= upper,
+        "TM-WS.10 ({wrapper_name}): close at {wrapper_t:?} > {upper:?}"
+    );
+    assert!(
+        phone_t <= upper,
+        "TM-WS.10 ({phone_name}): close at {phone_t:?} > {upper:?}"
+    );
+    assert!(
+        wrapper_t >= lower,
+        "TM-WS.10 ({wrapper_name}): close at {wrapper_t:?} < {lower:?} — premature close means the timeout isn't actually waiting on the headers"
+    );
+    assert!(
+        phone_t >= lower,
+        "TM-WS.10 ({phone_name}): close at {phone_t:?} < {lower:?} — premature close"
+    );
+
+    let diff = wrapper_t.abs_diff(phone_t);
+    assert!(
+        diff <= Duration::from_secs(3),
+        "TM-WS.10 asymmetry: wrapper={wrapper_t:?} phone={phone_t:?} diff={diff:?} > 3 s — routes drifted"
+    );
+}
+
+// --- TM-WS.7 helpers ------------------------------------------------------
+//
+// The pong-deadline asymmetry pin needs to drive both routes past their
+// post-upgrade gates (wrapper HELLO_TIMEOUT, phone token-resolution) and
+// then go silent. tokio-tungstenite would auto-Pong, so we hand-write the
+// HELLO frame on a raw socket. RFC 6455 §5.2 frame format, client-to-server
+// MUST be masked.
+
+async fn raw_ws_complete_upgrade(port: u16, path: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))
+        .await
+        .expect("tcp connect");
+    let req = format!(
+        "GET {path} HTTP/1.1\r\n\
+         Host: 127.0.0.1:{port}\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+         Sec-WebSocket-Version: 13\r\n\r\n"
+    );
+    stream
+        .write_all(req.as_bytes())
+        .await
+        .expect("write handshake");
+    let mut chunk = [0u8; 1024];
+    let mut buf: Vec<u8> = Vec::with_capacity(2048);
+    while buf.windows(4).all(|w| w != b"\r\n\r\n") {
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut chunk))
+            .await
+            .expect("upgrade response within 5 s")
+            .expect("read");
+        if n == 0 {
+            panic!("peer closed before upgrade completed");
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    stream
+}
+
+async fn ws_send_masked_text(stream: &mut TcpStream, payload: &str) {
+    let bytes = payload.as_bytes();
+    let len = bytes.len();
+    let mut frame: Vec<u8> = Vec::with_capacity(14 + len);
+    frame.push(0x81); // FIN=1, opcode=text
+    if len < 126 {
+        frame.push(0x80 | (len as u8));
+    } else if len <= 65_535 {
+        frame.push(0x80 | 126);
+        frame.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        frame.push(0x80 | 127);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    // Mask key. Entropy doesn't matter for unmasking; pin a constant so
+    // the wire is reproducible if a future debugger ever taps it.
+    let mask = [0xa5_u8, 0x5a, 0x3c, 0xc3];
+    frame.extend_from_slice(&mask);
+    for (i, b) in bytes.iter().enumerate() {
+        frame.push(b ^ mask[i & 3]);
+    }
+    stream.write_all(&frame).await.expect("write text frame");
+}
+
+/// TM-WS.7 — Both routes MUST drop a peer that stops responding to server
+/// Pings within `PONG_DEADLINE` (4.6 lands a 90 s deadline, ping every
+/// 30 s). 4.6's `rate_limit.rs` test pins the constant; this asymmetry
+/// pin asserts the *runtime* behaviour matches on BOTH URL paths, so a
+/// future copy-pasted refactor that breaks the watchdog on one side trips
+/// CI even when the constant looks fine.
+///
+/// Driven via raw TCP because tokio-tungstenite's `read` loop transparently
+/// answers server Pings with Pongs, which would defeat the watchdog under
+/// test. The raw socket sends a single HELLO text frame (to satisfy the
+/// post-upgrade gate so the keepalive task starts) and then drains
+/// everything else without ever sending a Pong.
+///
+/// Marked `#[ignore]` because PONG_DEADLINE = 90 s makes this a >2 minute
+/// test. Run explicitly with:
+///
+/// ```text
+/// cargo test -p claude-phone-gateway --test websocket -- --ignored both_routes_drop_on_no_pong_within_deadline
+/// ```
+#[tokio::test]
+#[ignore = "slow ~125 s — TM-WS.7 asymmetry pin, run nightly or on-demand"]
+async fn both_routes_drop_on_no_pong_within_deadline() {
+    let (port, api_key) = spawn_gateway(None).await;
+    let token = SessionToken::generate();
+
+    // Wrapper: establishes the session by sending its WrapperHello first.
+    let mut wrapper = raw_ws_complete_upgrade(port, "/api/wrapper").await;
+    let wrapper_hello = format!(
+        r#"{{"type":"wrapper_hello","api_key":"{}","token":"{}","cols":80,"rows":24}}"#,
+        api_key.as_str(),
+        token.as_str()
+    );
+    ws_send_masked_text(&mut wrapper, &wrapper_hello).await;
+
+    // Phone: connects to the now-registered token and identifies itself.
+    let mut phone = raw_ws_complete_upgrade(port, &format!("/api/phone/{}", token.as_str())).await;
+    let phone_hello = format!(
+        r#"{{"type":"phone_hello","token":"{}","cols":80,"rows":24}}"#,
+        token.as_str()
+    );
+    ws_send_masked_text(&mut phone, &phone_hello).await;
+
+    // Start the clock now — both keepalive loops have been kicked off by
+    // their HELLO. The 90 s PONG_DEADLINE runs from socket_start, which is
+    // captured at task spawn (right after HELLO is accepted).
+    let started = std::time::Instant::now();
+
+    // Drain both in parallel without ever sending a Pong. A 180 s read
+    // timeout caps the wait so a regression that disables the watchdog
+    // fails the test instead of hanging the runner indefinitely.
+    let drain = |mut s: TcpStream, name: &'static str| async move {
+        let started = std::time::Instant::now();
+        let mut sink = [0u8; 4096];
+        loop {
+            match tokio::time::timeout(Duration::from_secs(180), s.read(&mut sink)).await {
+                Ok(Ok(0)) => break,
+                Ok(Ok(_)) => continue,
+                Ok(Err(e)) => panic!("TM-WS.7 ({name}): read error: {e}"),
+                Err(_) => panic!(
+                    "TM-WS.7 ({name}): no close after 180 s of no-pong — watchdog not firing"
+                ),
+            }
+        }
+        started.elapsed()
+    };
+    let wrapper_handle = tokio::spawn(drain(wrapper, "wrapper"));
+    let phone_handle = tokio::spawn(drain(phone, "phone"));
+    let wrapper_t = wrapper_handle.await.expect("wrapper drain task");
+    let phone_t = phone_handle.await.expect("phone drain task");
+
+    // Sanity: the test itself should be done in well under the per-stream
+    // timeout. If we see >150 s here something is off with the scheduler.
+    assert!(
+        started.elapsed() <= Duration::from_secs(150),
+        "test wall-clock exceeded 150 s, asymmetry pin disrupted"
+    );
+
+    // Window per route: PONG_DEADLINE (90 s) + one ping_interval (30 s) + 5 s
+    // jitter. Floor: PONG_DEADLINE - one ping_interval, since the first
+    // Ping fires anywhere within `[0, 30 s)` of socket_start.
+    let upper = Duration::from_secs(125);
+    let lower = Duration::from_secs(60);
+    assert!(
+        wrapper_t <= upper,
+        "TM-WS.7 (wrapper): close at {wrapper_t:?} > {upper:?}"
+    );
+    assert!(
+        phone_t <= upper,
+        "TM-WS.7 (phone): close at {phone_t:?} > {upper:?}"
+    );
+    assert!(
+        wrapper_t >= lower,
+        "TM-WS.7 (wrapper): close at {wrapper_t:?} < {lower:?} — deadline shrank"
+    );
+    assert!(
+        phone_t >= lower,
+        "TM-WS.7 (phone): close at {phone_t:?} < {lower:?} — deadline shrank"
+    );
+
+    let diff = wrapper_t.abs_diff(phone_t);
+    assert!(
+        diff <= Duration::from_secs(35),
+        "TM-WS.7 asymmetry: wrapper={wrapper_t:?} phone={phone_t:?} diff={diff:?} > 35 s — routes drifted"
+    );
+}
