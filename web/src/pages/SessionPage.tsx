@@ -186,7 +186,7 @@ function HeaderBtn({
       type="button"
       onClick={onClick}
       aria-label={ariaLabel}
-      className="px-2 py-0.5 rounded border border-claude-panelBorder bg-claude-panelBg text-claude-fg active:bg-claude-panelBorder text-xs"
+      className="px-2 py-0.5 rounded border border-claude-panelBorder bg-claude-panelBg text-claude-fg active:bg-white active:text-black text-xs"
     >
       {label}
     </button>

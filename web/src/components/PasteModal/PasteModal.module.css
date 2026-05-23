@@ -53,7 +53,9 @@
   flex: 1;
   min-height: 160px;
   resize: none;
-  border: 0;
+  /* On the pure-black palette the textarea bg is the same colour as the
+     panel, so a thin border is required to delineate the input area. */
+  border: 1px solid var(--cl-panel-border);
   outline: 0;
   padding: 12px;
   background: var(--cl-input-bg);
@@ -103,6 +105,9 @@
 
 .btnGhost:active {
   background: var(--cl-panel-border);
+  /* Without this, a white panel-border bg + white fg would be invisible
+     during press on the all-black/white theme. */
+  color: var(--cl-bg);
 }
 
 .btnPrimary {

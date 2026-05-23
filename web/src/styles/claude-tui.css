@@ -1,11 +1,18 @@
 :root {
   --cl-bg: #000000;
-  --cl-fg: #e6e6e6;
-  --cl-accent: #ce8c5a;
-  --cl-muted: #6e6e6e;
-  --cl-panel-bg: #0a0a0a;
-  --cl-panel-border: #1f1f1f;
-  --cl-input-bg: #121212;
+  --cl-fg: #ffffff;
+  --cl-accent: #ffffff;
+  /* Muted is used for placeholder/hint text. Keep it white-tinted so it is
+     readable on pure black; we differentiate via weight/opacity, not hue. */
+  --cl-muted: #cccccc;
+  /* Panel background is the same pure black as the page — borders carry the
+     visual separation. Previously a slightly-lighter panel sat in front of
+     a pure-black page, which gave the impression of an opaque rectangle
+     "covering" the terminal area on OLED screens. */
+  --cl-panel-bg: #000000;
+  --cl-panel-border: #ffffff;
+  --cl-input-bg: #000000;
+  /* Green retained ONLY for the "paired" status indicator. */
   --cl-ok: #7fb069;
-  --cl-err: #cf6679;
+  --cl-err: #ffffff;
 }

@@ -32,6 +32,7 @@
 
 .scrollBottom:active {
   background: var(--cl-panel-border);
+  color: var(--cl-bg);
 }
 
 .container :global(.xterm) {
