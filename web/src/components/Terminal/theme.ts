@@ -3,13 +3,13 @@ import type { ITheme } from '@xterm/xterm';
 // ANSI palette approximating Claude Code's default terminal scheme.
 // Tuned for OLED-friendly contrast on mobile.
 export const claudeTheme: ITheme = {
-  background: '#0a0a0a',
+  background: '#000000',
   foreground: '#e6e6e6',
   cursor: '#ce8c5a',
-  cursorAccent: '#0a0a0a',
+  cursorAccent: '#000000',
   selectionBackground: '#3a3a3a',
   selectionForeground: '#ffffff',
-  black: '#0a0a0a',
+  black: '#000000',
   red: '#cf6679',
   green: '#7fb069',
   yellow: '#e0c97f',
