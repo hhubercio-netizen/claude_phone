@@ -7,5 +7,7 @@ pub mod config;
 pub mod error;
 pub mod http;
 pub mod logging;
+pub mod rate_limit;
 pub mod routes;
+pub mod serve;
 pub mod session;

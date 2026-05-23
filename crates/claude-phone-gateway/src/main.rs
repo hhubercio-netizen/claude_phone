@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::Parser;
+use tokio::net::TcpListener;
 
-use claude_phone_gateway::{config::GatewayConfig, http::build_app, logging};
+use claude_phone_gateway::{config::GatewayConfig, http::build_app, logging, serve};
 
 #[derive(Parser)]
 #[command(version, about = "Claude Phone gateway server")]
@@ -28,15 +29,17 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(bind = %config.bind_addr, "starting gateway");
 
     let app = build_app(&config)?;
-    let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
+    let listener = TcpListener::bind(config.bind_addr).await?;
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    // TM-RATE.9 — serve::run replaces axum::serve so we can set
+    // http1_header_read_timeout. The same function is exercised by
+    // tests/rate_limit.rs, which keeps the slow-loris guard from
+    // regressing if a future refactor reaches for axum::serve again.
+    serve::run(listener, app, shutdown_signal()).await;
+
     Ok(())
 }
 
 async fn shutdown_signal() {
     tokio::signal::ctrl_c().await.ok();
-    tracing::info!("shutdown signal received");
 }

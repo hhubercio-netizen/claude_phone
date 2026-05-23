@@ -637,7 +637,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
-| TM-RATE.1  | tower-governor per-IP cap, 5 concurrent WS                                                  | TODO   |
+| TM-RATE.1  | tower-governor per-IP HTTP cap (5 req/s, burst 10) wired in `http.rs` GovernorLayer + `serve.rs` ConnectInfo injection; covered by `tests/rate_limit.rs::per_ip_governor_returns_429_under_burst` | GREEN  |
 | TM-RATE.2  | Auth-attempt rate limit, 10/IP/min, exp backoff after 5                                     | TODO   |
 | TM-RATE.3  | Per-connection msg/s rate (100 phone→gw, 1000 gw→phone)                                     | TODO   |
 | TM-RATE.4  | Per-session memory cap `PHONE_BUFFER_BYTES_CAP = 64 KiB`, drop oldest on overflow (session.rs:24) | GREEN  |
@@ -645,7 +645,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-RATE.6  | Slow-write defense: bounded channel + timeout on sink send                                  | TODO   |
 | TM-RATE.7  | Post-hello idle timeout (ping/pong + 60 s no-pong → drop)                                   | TODO   |
 | TM-RATE.8  | Slow-loris recv_hello timeout 10 s on wrapper_ws                                            | GREEN  |
-| TM-RATE.9  | Slow-loris HTTP upgrade timeout (axum/hyper default) — verify                                | VERIFY |
+| TM-RATE.9  | Slow-loris HTTP upgrade timeout: `hyper_util::server::conn::auto` with `http1.header_read_timeout(10s)` via `serve::run` (replaces `axum::serve` which doesn't surface the knob); covered by `tests/rate_limit.rs::slow_loris_header_read_timeout` | GREEN  |
 
 ### Secrets management (TM-SECRET)
 

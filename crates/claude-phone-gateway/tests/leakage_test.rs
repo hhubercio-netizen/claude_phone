@@ -31,7 +31,9 @@ async fn spawn_test_gateway(api_key: ApiKey) -> u16 {
         .await
         .unwrap();
     tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        // TM-RATE.1/.9 — use the same serve loop as the binary so
+        // GovernorLayer + header_read_timeout are in the test path.
+        claude_phone_gateway::serve::run(listener, app, std::future::pending::<()>()).await;
     });
     Box::leak(Box::new(static_dir));
     port

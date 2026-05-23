@@ -32,7 +32,17 @@ axum = { version = "0.7", features = ["ws", "macros"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "compression-gzip", "fs", "trace", "set-header"] }
 hyper = { version = "1", features = ["full"] }
+# TM-RATE.9 — direct hyper builder lets us set http1_header_read_timeout,
+# which axum::serve doesn't expose. Needed in main.rs to bound the
+# slow-loris attack on the HTTP upgrade phase.
+hyper-util = { version = "0.1", features = ["server-auto", "server-graceful", "tokio"] }
 tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# TM-RATE.1 — per-IP HTTP rate limit. tower_governor wraps the leaky-bucket
+# `governor` library as a tower layer that special-cases WS upgrades so the
+# inner future swap doesn't double-count.
+tower_governor = "0.4"
+governor = "0.6"
 
 # serialization
 serde = { version = "1", features = ["derive"] }

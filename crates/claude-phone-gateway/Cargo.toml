@@ -22,6 +22,10 @@ futures = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
+tower_governor = { workspace = true }
+governor = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

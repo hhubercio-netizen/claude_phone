@@ -3,6 +3,8 @@ use std::sync::Arc;
 use axum::http::{header, HeaderName, HeaderValue, Request};
 use axum::routing::{any, get};
 use axum::Router;
+use tower_governor::governor::GovernorConfigBuilder;
+use tower_governor::GovernorLayer;
 use tower_http::compression::CompressionLayer;
 use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -11,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use claude_phone_shared::ApiKey;
 
 use crate::config::GatewayConfig;
+use crate::rate_limit::{PER_IP_BURST, PER_IP_REQ_PER_SEC};
 use crate::routes::{health, phone_ws, statics, wrapper_ws};
 use crate::session::SessionRegistry;
 
@@ -137,6 +140,29 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
             HeaderValue::from_static("claude-phone"),
         ));
 
+    // TM-RATE.1 — per-IP HTTP cap. burst=10 absorbs reconnect storms on
+    // flaky mobile networks; sustained PER_IP_REQ_PER_SEC blocks WS-flood
+    // attackers. GovernorLayer is added INSIDE the security-headers layer
+    // so 429 responses still carry the strict CSP / HSTS / X-Frame headers
+    // (defense in depth on error pages). `/healthz` is intentionally also
+    // rate-limited — a hostile flood there is the same DoS vector as on
+    // any other route, and a legitimate health probe loop is well under
+    // 5/s anyway.
+    //
+    // Why `.expect`: GovernorConfigBuilder validates on `.finish()`. With
+    // hard-coded constants the only failure mode is "constants both zero",
+    // which a build-time-visible review (and the forward-looking integration
+    // test `per_ip_governor_returns_429_under_burst`) keeps us off of.
+    let governor_conf = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(PER_IP_REQ_PER_SEC)
+            .burst_size(PER_IP_BURST)
+            .finish()
+            // TM-CODE.3: governor builder failure is unreachable for the
+            // hard-coded constants above — both are non-zero by definition.
+            .expect("GovernorConfigBuilder accepts non-zero per_second + burst_size"),
+    );
+
     let app = Router::new()
         .route("/healthz", get(health::handler))
         .route("/api/wrapper", any(wrapper_ws::handler))
@@ -147,6 +173,9 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
         .route("/s/:token", get(statics::session_shell))
         .route("/", get(statics::root))
         .with_state(static_state)
+        .layer(GovernorLayer {
+            config: governor_conf,
+        })
         .layer(security_headers)
         .layer(CompressionLayer::new())
         .layer(trace_layer);

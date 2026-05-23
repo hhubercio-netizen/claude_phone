@@ -38,7 +38,10 @@ async fn spawn_test_gateway_with_origin(api_key: ApiKey, public_origin: Option<S
         .await
         .expect("bind");
     tokio::spawn(async move {
-        axum::serve(listener, app).await.ok();
+        // TM-RATE.1/.9 — exercise the same serve loop the binary uses so
+        // GovernorLayer gets ConnectInfo and slow-loris timeout fires.
+        // axum::serve here would skip both and let regressions land green.
+        claude_phone_gateway::serve::run(listener, app, std::future::pending::<()>()).await;
     });
     Box::leak(Box::new(static_dir));
     port
