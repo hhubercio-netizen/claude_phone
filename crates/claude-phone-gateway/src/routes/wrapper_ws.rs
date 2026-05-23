@@ -11,7 +11,9 @@ use futures::{SinkExt, StreamExt};
 use claude_phone_shared::protocol::{ControlMessage, ErrorCode, ErrorMessage, ServerHello};
 
 use crate::auth::verify_api_key;
-use crate::rate_limit::{AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC};
+use crate::rate_limit::{
+    AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC, SINK_SEND_TIMEOUT,
+};
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -215,11 +217,41 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
                         Frame::Binary(b) => Message::Binary(b),
                         Frame::Text(t) => Message::Text(t),
                     };
-                    if sink.send(msg).await.is_err() { break; }
+                    // TM-RATE.6: bounded wait so a slow-reading peer can't
+                    // pin the writer forever. timeout()->Err is "stalled",
+                    // Ok(Err) is "socket dead"; both are terminal. On stall
+                    // we cancel the session so the outgoing_task tears down
+                    // too — a half-closed socket still costs an FD.
+                    match tokio::time::timeout(SINK_SEND_TIMEOUT, sink.send(msg)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => {
+                            cancel_incoming.cancel();
+                            break;
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                timeout_secs = SINK_SEND_TIMEOUT.as_secs(),
+                                "TM-RATE.6: wrapper sink send stalled, closing"
+                            );
+                            cancel_incoming.cancel();
+                            break;
+                        }
+                    }
                 }
                 _ = keepalive.tick() => {
-                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
-                        break;
+                    // TM-RATE.6: same bound on the keepalive write — a peer
+                    // that won't accept a 0-byte ping isn't accepting anything.
+                    match tokio::time::timeout(
+                        SINK_SEND_TIMEOUT,
+                        sink.send(Message::Ping(Vec::new())),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) | Err(_) => {
+                            cancel_incoming.cancel();
+                            break;
+                        }
                     }
                 }
             }

@@ -127,6 +127,23 @@ impl AuthRateLimiter {
 pub const PHONE_TO_GW_MSG_PER_SEC: usize = 100;
 pub const GW_TO_PHONE_MSG_PER_SEC: usize = 1000;
 
+// --- TM-RATE.6 -------------------------------------------------------------
+
+// TM-RATE.6 — slow-write defense.
+//
+// A malicious peer can accept TCP data infinitely slowly, leaving the
+// outbound `sink.send()` future awaiting the writable signal forever.
+// The bounded session channels (256 frames) protect the producer side,
+// but a single sink that never drains still ties up that connection's
+// task and one slot in the registry. A 5 s wall-clock timeout on every
+// `sink.send()` lets us declare the connection dead and reclaim it.
+//
+// 5 s is loose enough that a genuinely backed-up but live peer on a
+// flaky mobile uplink (one of our supported scenarios) is not killed
+// during a transient stall, but strict enough that a hostile zero-rate
+// reader is shut down well before its connection becomes a DoS lever.
+pub const SINK_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[derive(Debug)]
 pub struct ConnRateLimiter {
     window: VecDeque<Instant>,

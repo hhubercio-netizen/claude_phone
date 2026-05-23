@@ -13,7 +13,7 @@ use claude_phone_shared::protocol::{
 };
 use claude_phone_shared::SessionToken;
 
-use crate::rate_limit::{ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC};
+use crate::rate_limit::{ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC, SINK_SEND_TIMEOUT};
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -182,11 +182,41 @@ async fn handle_socket(
                         Frame::Binary(b) => Message::Binary(b),
                         Frame::Text(t) => Message::Text(t),
                     };
-                    if sink.send(msg).await.is_err() { break; }
+                    // TM-RATE.6: same slow-write defense as wrapper_ws.
+                    // A phone holding its read buffer indefinitely would
+                    // otherwise pin the writer forever once the bounded
+                    // channel filled up. On stall we cancel the session
+                    // so outgoing_task tears down too.
+                    match tokio::time::timeout(SINK_SEND_TIMEOUT, sink.send(msg)).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) => {
+                            cancel_incoming.cancel();
+                            break;
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                peer = %peer,
+                                timeout_secs = SINK_SEND_TIMEOUT.as_secs(),
+                                "TM-RATE.6: phone sink send stalled, closing"
+                            );
+                            cancel_incoming.cancel();
+                            break;
+                        }
+                    }
                 }
                 _ = keepalive.tick() => {
-                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
-                        break;
+                    // TM-RATE.6: bounded keepalive write — see wrapper_ws.
+                    match tokio::time::timeout(
+                        SINK_SEND_TIMEOUT,
+                        sink.send(Message::Ping(Vec::new())),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => {}
+                        Ok(Err(_)) | Err(_) => {
+                            cancel_incoming.cancel();
+                            break;
+                        }
                     }
                 }
             }

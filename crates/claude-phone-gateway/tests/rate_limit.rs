@@ -12,7 +12,10 @@ use std::time::Duration;
 use claude_phone_gateway::{
     config::{GatewayConfig, LogFormat},
     http::build_app,
-    rate_limit::{AUTH_FAIL_THRESHOLD, GW_TO_PHONE_MSG_PER_SEC, PER_IP_BURST, PER_IP_REQ_PER_SEC},
+    rate_limit::{
+        AUTH_FAIL_THRESHOLD, GW_TO_PHONE_MSG_PER_SEC, PER_IP_BURST, PER_IP_REQ_PER_SEC,
+        SINK_SEND_TIMEOUT,
+    },
     serve,
 };
 use claude_phone_shared::{
@@ -301,5 +304,25 @@ async fn wrapper_message_flood_closes_session() {
         close_result.is_ok(),
         "wrapper flood should have closed the session within 2s; \
          TM-RATE.3 ConnRateLimiter regression suspected"
+    );
+}
+
+/// RL-I5 — TM-RATE.6 SINK_SEND_TIMEOUT must be a bounded, non-degenerate
+/// value. A defender that sets the timeout to hours has effectively no
+/// slow-write defense; a defender that sets it sub-second kills honest
+/// mobile peers during transient stalls. The constant is also imported by
+/// both `wrapper_ws.rs` and `phone_ws.rs`; removing the timeout wrappers
+/// without also removing this import would fail clippy `-D warnings` for
+/// an unused import. Together with this assertion, that gives a two-sided
+/// forward-looking guard against silent weakening of the defense.
+#[test]
+fn sink_send_timeout_is_bounded_and_reasonable() {
+    assert!(
+        SINK_SEND_TIMEOUT >= Duration::from_secs(1),
+        "TM-RATE.6: sub-second SINK_SEND_TIMEOUT would kill honest mobile peers"
+    );
+    assert!(
+        SINK_SEND_TIMEOUT <= Duration::from_secs(30),
+        "TM-RATE.6: SINK_SEND_TIMEOUT > 30 s effectively disables slow-write defense"
     );
 }
