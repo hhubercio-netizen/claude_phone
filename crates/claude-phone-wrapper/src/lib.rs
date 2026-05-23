@@ -1,3 +1,8 @@
+// TM-CODE.2: deny new `unsafe` workspace-wide. The single legitimate
+// `unsafe` surface in this crate (`tty.rs`) opts back in via its own
+// `#![allow(unsafe_code)]` and inline `// SAFETY:` justifications.
+#![deny(unsafe_code)]
+
 pub mod bridge;
 pub mod cli;
 pub mod config;

@@ -1,3 +1,6 @@
+// TM-CODE.2: no `unsafe` allowed in this binary.
+#![deny(unsafe_code)]
+
 use clap::Parser;
 use serde::Deserialize;
 

@@ -731,7 +731,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
 | TM-CODE.1  | `cargo clippy --all-targets -- -D warnings -W clippy::pedantic` clean (fix real issues)     | TODO   |
-| TM-CODE.2  | `unsafe` block count = 0 in workspace                                                       | TODO   |
+| TM-CODE.2  | `unsafe` block count = 0 in workspace                                                       | GREEN  |
 | TM-CODE.3  | `panic!` / `unwrap` / `expect` audit in hot paths (tests-only allowed)                       | TODO   |
 | TM-CODE.4  | TOCTOU sweep in `session/registry.rs` (insert/check/use sequences)                          | GREEN  |
 | TM-CODE.5  | Channel back-pressure verify: no unbounded channels in hot paths; bounded with timeout      | TODO   |
