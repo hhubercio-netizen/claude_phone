@@ -19,6 +19,12 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # TM-CODE.3 — block `.unwrap()` / `panic!()` regressions in prod hot paths.
+      - name: TM-CODE.3 — hot-path unwrap/panic gate
+        run: bash scripts/check_hot_path_unwrap.sh
+      # TM-CODE.5 — block unbounded tokio channels in prod (slow-leak DoS).
+      - name: TM-CODE.5 — unbounded-channel gate
+        run: bash scripts/check_unbounded_channels.sh
 
   cargo-audit:
     name: cargo audit
