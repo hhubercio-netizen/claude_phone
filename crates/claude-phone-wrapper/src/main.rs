@@ -218,7 +218,15 @@ fn init_file_logging() -> anyhow::Result<std::path::PathBuf> {
                 .create(true)
                 .append(true)
                 .open(&path_for_writer)
-                .expect("re-opening wrapper.log")
+                // TM-CODE.3: this fires inside the tracing writer factory.
+                // If the log file can no longer be opened after daemonize
+                // (disk full, permissions revoked) the wrapper has lost its
+                // primary observability channel — fail loud rather than
+                // silently swallow logs.
+                .expect(
+                    "re-opening wrapper.log after daemonize — \
+                     unrecoverable; check disk and permissions",
+                )
         })
         .with_ansi(false)
         .with_env_filter(

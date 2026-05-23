@@ -87,8 +87,11 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
         session_id: session_id.clone(),
         peer_connected: true,
     });
+    // TM-CODE.3: ServerHello is a derive(Serialize) struct — infallible.
     if socket
-        .send(Message::Text(serde_json::to_string(&server_hello).unwrap()))
+        .send(Message::Text(
+            serde_json::to_string(&server_hello).expect("ServerHello serializes (static struct)"),
+        ))
         .await
         .is_err()
     {
@@ -96,10 +99,13 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
     }
 
     let peer_up = ControlMessage::PeerStatus(PeerStatus { connected: true });
+    // TM-CODE.3: PeerStatus is a derive(Serialize) struct with a single bool.
     let _ = handle
         .session
         .to_wrapper
-        .send(Frame::Text(serde_json::to_string(&peer_up).unwrap()))
+        .send(Frame::Text(
+            serde_json::to_string(&peer_up).expect("PeerStatus serializes (static struct)"),
+        ))
         .await;
 
     tracing::info!(session_id = %session_id, "phone attached");
@@ -172,17 +178,23 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
     // for sessions that are currently phone-less.
     handle.session.touch_phone().await;
     let peer_down = ControlMessage::PeerStatus(PeerStatus { connected: false });
+    // TM-CODE.3: PeerStatus is a derive(Serialize) struct with a single bool.
     let _ = handle
         .session
         .to_wrapper
-        .send(Frame::Text(serde_json::to_string(&peer_down).unwrap()))
+        .send(Frame::Text(
+            serde_json::to_string(&peer_down).expect("PeerStatus serializes (static struct)"),
+        ))
         .await;
     tracing::info!(session_id = %session_id, "phone detached");
 }
 
 async fn send_error(socket: &mut WebSocket, code: ErrorCode, message: String) {
     let err = ControlMessage::Error(ErrorMessage { code, message });
+    // TM-CODE.3: ErrorMessage is a derive(Serialize) struct — infallible.
     let _ = socket
-        .send(Message::Text(serde_json::to_string(&err).unwrap()))
+        .send(Message::Text(
+            serde_json::to_string(&err).expect("ErrorMessage serializes (static struct)"),
+        ))
         .await;
 }

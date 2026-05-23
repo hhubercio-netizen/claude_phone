@@ -93,8 +93,12 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
         session_id: session_id.clone(),
         peer_connected: false,
     });
+    // TM-CODE.3: ServerHello is a derive(Serialize) struct of owned Strings
+    // and primitives — serde_json::to_string is infallible in practice.
     if socket
-        .send(Message::Text(serde_json::to_string(&server_hello).unwrap()))
+        .send(Message::Text(
+            serde_json::to_string(&server_hello).expect("ServerHello serializes (static struct)"),
+        ))
         .await
         .is_err()
     {
@@ -198,7 +202,11 @@ async fn recv_hello(socket: &mut WebSocket) -> Option<ControlMessage> {
 
 async fn send_error(socket: &mut WebSocket, code: ErrorCode, message: String) {
     let err = ControlMessage::Error(ErrorMessage { code, message });
+    // TM-CODE.3: ErrorMessage is a derive(Serialize) struct of an enum tag
+    // and a String — serde_json::to_string is infallible in practice.
     let _ = socket
-        .send(Message::Text(serde_json::to_string(&err).unwrap()))
+        .send(Message::Text(
+            serde_json::to_string(&err).expect("ErrorMessage serializes (static struct)"),
+        ))
         .await;
 }
