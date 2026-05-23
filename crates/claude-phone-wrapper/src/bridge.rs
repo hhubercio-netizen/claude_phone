@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures::{SinkExt, Stream};
 use tokio_tungstenite::tungstenite::Message;
 
-use claude_phone_shared::protocol::{ControlMessage, Resize};
+use claude_phone_shared::protocol::{ControlMessage, PeerStatus, Resize};
 
 use crate::gateway_client::GatewayClient;
 use crate::pty::PtySession;
@@ -63,10 +63,18 @@ where
                         let _ = pty.write_chunk(&b).await;
                     }
                     BridgeFrame::Text(t) => {
-                        if let Ok(ControlMessage::Resize(Resize { cols, rows })) =
-                            serde_json::from_str(&t)
-                        {
-                            let _ = pty.resize(cols, rows);
+                        match serde_json::from_str::<ControlMessage>(&t) {
+                            Ok(ControlMessage::Resize(Resize { cols, rows })) => {
+                                let _ = pty.resize(cols, rows);
+                            }
+                            // Phone disconnected. Exit the bridge so main can
+                            // accept the next /pair. PTY (and its child) stays
+                            // alive because the lock is released, not the
+                            // PtySession itself.
+                            Ok(ControlMessage::PeerStatus(PeerStatus {
+                                connected: false,
+                            })) => break,
+                            _ => {}
                         }
                     }
                     BridgeFrame::Ping(p) => {

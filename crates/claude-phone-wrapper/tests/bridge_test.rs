@@ -156,6 +156,36 @@ async fn pty_eof_terminates_run() {
 }
 
 #[tokio::test]
+async fn peer_disconnect_terminates_run() {
+    // When the phone goes away, the gateway sends `peer_status: connected=false`
+    // as a text frame. The bridge must exit so main can release the PTY lock
+    // and accept the next /pair. Without this, the wrapper deadlocks after the
+    // first phone disconnect.
+    let h = setup();
+    let peer_down = r#"{"type":"peer_status","connected":false}"#.to_string();
+    h.stream_tx.send(BridgeFrame::Text(peer_down)).unwrap();
+    // No explicit Close after — the bridge must exit on its own.
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    tokio::time::timeout(std::time::Duration::from_secs(2), handle)
+        .await
+        .expect("bridge did not exit on peer_disconnect")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn peer_connect_does_not_terminate() {
+    // The complementary signal — phone joining — must NOT end the bridge.
+    let h = setup();
+    let peer_up = r#"{"type":"peer_status","connected":true}"#.to_string();
+    h.stream_tx.send(BridgeFrame::Text(peer_up)).unwrap();
+    // Drop the stream by sending Close so the test terminates.
+    h.stream_tx.send(BridgeFrame::Close).unwrap();
+    let handle = tokio::spawn(run(h.stream, h.sink, h.pty));
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
 async fn malformed_text_does_not_crash() {
     let h = setup();
     h.stream_tx
