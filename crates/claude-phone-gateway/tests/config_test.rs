@@ -21,7 +21,7 @@ fn defaults_session_timeout() {
         api_keys = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
     "#;
     let cfg: GatewayConfig = toml::from_str(toml).unwrap();
-    assert_eq!(cfg.session_idle_timeout_secs, 300);
+    assert_eq!(cfg.session_idle_timeout_secs, 7 * 24 * 60 * 60);
 }
 
 #[test]

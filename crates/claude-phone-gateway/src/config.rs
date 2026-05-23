@@ -30,8 +30,14 @@ pub enum LogFormat {
     Json,
 }
 
+/// Default phone-idle timeout: 7 days. The session lives as long as the
+/// phone has been seen within this window. Resets on phone attach (sticky
+/// session). Generous default — most users will pair on Monday and expect
+/// the link to still work on Friday. If the wrapper exits or a new /pair
+/// is triggered on the host, the session is dropped immediately regardless
+/// of this timeout.
 fn default_session_timeout() -> u64 {
-    300
+    7 * 24 * 60 * 60
 }
 fn default_max_sessions() -> usize {
     100

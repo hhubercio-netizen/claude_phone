@@ -26,7 +26,7 @@ cat > gateway-dev.toml <<EOF
 bind_addr = "127.0.0.1:8080"
 static_dir = "web/dist"
 api_keys = ["$API_KEY"]
-session_idle_timeout_secs = 300
+session_idle_timeout_secs = 604800
 max_sessions = 4
 log_format = "pretty"
 EOF

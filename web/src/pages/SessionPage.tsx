@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActionBar } from '../components/ActionBar/ActionBar';
 import { MobileLayout } from '../components/Layout/MobileLayout';
 import { Terminal } from '../components/Terminal/Terminal';
-import { useWebSocket } from '../hooks/useWebSocket';
+import { useReconnectingWebSocket } from '../hooks/useReconnect';
 import { useSessionStore } from '../store/session';
 import type { ControlMessage } from '../lib/protocol';
 
@@ -31,17 +31,19 @@ export function SessionPage() {
   const setServerSessionId = useSessionStore((s) => s.setServerSessionId);
 
   const writeRef = useRef<((bytes: Uint8Array) => void) | null>(null);
-  const [helloSent, setHelloSent] = useState(false);
 
   const tokenValid = isValidToken(token);
   const url = tokenValid ? gatewayWsUrl(token) : null;
-  const { state, client, on } = useWebSocket(url);
+  const { state, client, on } = useReconnectingWebSocket(url);
 
-  // Send phone_hello after open
+  // Send phone_hello after EVERY open — the reconnecting hook re-opens the WS
+  // on backoff after network blips, and the gateway expects phone_hello to be
+  // the first message on each fresh socket. The gateway-side sticky session
+  // matches us back to the same Session by token and replays buffered output.
   useEffect(() => {
     if (!client || !tokenValid) return;
     const off = on((e) => {
-      if (e.type === 'open' && !helloSent) {
+      if (e.type === 'open') {
         client.sendControl({
           type: 'phone_hello',
           token: token!,
@@ -49,7 +51,6 @@ export function SessionPage() {
           rows: 24,
           user_agent: navigator.userAgent,
         });
-        setHelloSent(true);
       } else if (e.type === 'control') {
         handleControl(e.message);
       } else if (e.type === 'binary') {
@@ -58,7 +59,7 @@ export function SessionPage() {
     });
     return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, on, token, helloSent, tokenValid]);
+  }, [client, on, token, tokenValid]);
 
   if (!tokenValid) {
     return <div className="p-4 text-claude-err">Bad token format.</div>;

@@ -1,8 +1,10 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::mpsc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 
 use claude_phone_shared::SessionToken;
 
@@ -111,6 +113,60 @@ pub struct Session {
     pub token: SessionToken,
     pub to_wrapper: mpsc::Sender<Frame>,
     pub to_phone: Arc<Mutex<PhoneChannel>>,
+    /// Wall-clock of the most recent moment a phone was attached to this
+    /// session. Updated on attach AND on detach so an actively-connected
+    /// phone keeps the timestamp fresh; the sweeper uses this plus the
+    /// `is_attached()` flag to decide expiry.
+    pub last_phone_seen: Arc<Mutex<Instant>>,
+    /// Server-initiated cancellation. The idle sweeper sets `cancelled` and
+    /// wakes any task awaiting `cancel.notified()`. The flag handles the
+    /// race where the sweeper fires before a task has actually started
+    /// polling — late starters check the flag and bail immediately.
+    pub cancel: Arc<Cancel>,
+}
+
+/// Notify-with-flag, structured so a task that registers AFTER the sweeper
+/// fires still observes cancellation. `Notify::notify_waiters()` alone is
+/// edge-triggered: anyone not yet polling at the moment of the notify
+/// would miss it. Pairing it with an `AtomicBool` makes the signal sticky.
+#[derive(Debug, Default)]
+pub struct Cancel {
+    flag: AtomicBool,
+    notify: Notify,
+}
+
+impl Cancel {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.flag.load(Ordering::Acquire)
+    }
+
+    /// Set the flag and wake every current waiter. Idempotent.
+    pub fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.notify.notify_waiters();
+    }
+
+    /// Future that resolves as soon as cancel is observed. Safe to await
+    /// even if cancel already fired — the flag short-circuits the wait.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        loop {
+            let notified = self.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+            if self.is_cancelled() {
+                return;
+            }
+        }
+    }
 }
 
 impl Session {
@@ -120,7 +176,14 @@ impl Session {
             token,
             to_wrapper,
             to_phone: Arc::new(Mutex::new(PhoneChannel::new())),
+            last_phone_seen: Arc::new(Mutex::new(Instant::now())),
+            cancel: Arc::new(Cancel::new()),
         }
+    }
+
+    /// Update `last_phone_seen` to `now`. Call at phone attach and detach.
+    pub async fn touch_phone(&self) {
+        *self.last_phone_seen.lock().await = Instant::now();
     }
 }
 

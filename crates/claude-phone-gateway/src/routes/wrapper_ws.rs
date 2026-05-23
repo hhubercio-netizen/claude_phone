@@ -85,43 +85,72 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
     let session = handle.session.clone();
 
     let session_outgoing = session.clone();
+    let cancel_outgoing = session.cancel.clone();
     let outgoing_task = tokio::spawn(async move {
-        while let Some(msg) = stream.next().await {
-            let Ok(msg) = msg else { break };
-            let frame = match msg {
-                Message::Binary(b) => Frame::Binary(b),
-                Message::Text(t) => Frame::Text(t),
-                Message::Close(_) => break,
-                _ => continue,
-            };
-            // Snapshot the sender under the lock, then release before the
-            // potentially-blocking send. If no phone is attached, binary frames
-            // go to the replay buffer; text frames are dropped (they are
-            // transient control signals that would be confusing to replay).
-            let sender_opt = {
-                let mut slot = session_outgoing.to_phone.lock().await;
-                let s = slot.sender();
-                if s.is_none() {
-                    if let Frame::Binary(bytes) = &frame {
-                        slot.push_buffered(bytes.clone());
+        loop {
+            let cancelled = cancel_outgoing.cancelled();
+            tokio::pin!(cancelled);
+            tokio::select! {
+                biased;
+                _ = &mut cancelled => break,
+                msg = stream.next() => {
+                    let Some(Ok(msg)) = msg else { break };
+                    let frame = match msg {
+                        Message::Binary(b) => Frame::Binary(b),
+                        Message::Text(t) => Frame::Text(t),
+                        Message::Close(_) => break,
+                        _ => continue,
+                    };
+                    // Snapshot the sender under the lock, then release before
+                    // the potentially-blocking send. If no phone is attached,
+                    // binary frames go to the replay buffer; text frames are
+                    // dropped (transient control signals that would be
+                    // confusing to replay).
+                    let sender_opt = {
+                        let mut slot = session_outgoing.to_phone.lock().await;
+                        let s = slot.sender();
+                        if s.is_none() {
+                            if let Frame::Binary(bytes) = &frame {
+                                slot.push_buffered(bytes.clone());
+                            }
+                        }
+                        s
+                    };
+                    if let Some(tx) = sender_opt {
+                        let _ = tx.send(frame).await;
                     }
                 }
-                s
-            };
-            if let Some(tx) = sender_opt {
-                let _ = tx.send(frame).await;
             }
         }
     });
 
+    let cancel_incoming = session.cancel.clone();
     let incoming_task = tokio::spawn(async move {
-        while let Some(frame) = rx_from_phone.recv().await {
-            let msg = match frame {
-                Frame::Binary(b) => Message::Binary(b),
-                Frame::Text(t) => Message::Text(t),
-            };
-            if sink.send(msg).await.is_err() {
-                break;
+        // Periodically send a Ping so NAT/Cloudflare proxies don't tear the
+        // idle WebSocket down between bursts of PTY output. Wrapper-side WS
+        // also handles incoming Pong silently via the `_` branch.
+        let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(30));
+        keepalive.tick().await; // skip immediate tick
+
+        loop {
+            let cancelled = cancel_incoming.cancelled();
+            tokio::pin!(cancelled);
+            tokio::select! {
+                biased;
+                _ = &mut cancelled => break,
+                frame = rx_from_phone.recv() => {
+                    let Some(frame) = frame else { break };
+                    let msg = match frame {
+                        Frame::Binary(b) => Message::Binary(b),
+                        Frame::Text(t) => Message::Text(t),
+                    };
+                    if sink.send(msg).await.is_err() { break; }
+                }
+                _ = keepalive.tick() => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });

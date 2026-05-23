@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -83,6 +84,9 @@ impl SessionRegistry {
             }
             slot.attach_and_replay(tx_to_phone)
         };
+        // Reset the idle clock — a fresh phone attach is the "see" event the
+        // sweeper uses to decide expiry.
+        session.touch_phone().await;
         if replayed > 0 {
             tracing::debug!(replayed, "replayed buffered frames to phone");
         }
@@ -91,6 +95,43 @@ impl SessionRegistry {
             session,
             rx: rx_from_wrapper,
         })
+    }
+
+    /// Snapshot of all sessions and their idle metadata. Used by the
+    /// background sweeper; returns cloned `Arc`s so the DashMap is not held
+    /// locked while the caller does async work.
+    pub fn sessions_snapshot(&self) -> Vec<Arc<Session>> {
+        self.inner.iter().map(|v| v.clone()).collect()
+    }
+
+    /// Drop a session by token and fire its `cancel` so any wrapper/phone WS
+    /// tasks bound to it tear down. Idempotent.
+    pub async fn drop_session(&self, token: &SessionToken) {
+        if let Some((_, session)) = self.inner.remove(token.as_str()) {
+            session.cancel.cancel();
+            tracing::info!(session_id = %session.id, "session dropped by sweeper");
+        }
+    }
+
+    /// Sweep: drop every session that has had no attached phone for at
+    /// least `idle_timeout`. Sessions with an attached phone are never
+    /// considered expired no matter how long the phone has been quiet.
+    /// Returns the number of sessions dropped (for tracing/tests).
+    pub async fn sweep_expired(&self, idle_timeout: Duration) -> usize {
+        let now = Instant::now();
+        let mut dropped = 0;
+        for session in self.sessions_snapshot() {
+            let still_attached = session.to_phone.lock().await.is_attached();
+            if still_attached {
+                continue;
+            }
+            let last_seen = *session.last_phone_seen.lock().await;
+            if now.duration_since(last_seen) >= idle_timeout {
+                self.drop_session(&session.token).await;
+                dropped += 1;
+            }
+        }
+        dropped
     }
 
     pub fn lookup(&self, token: &SessionToken) -> Option<Arc<Session>> {

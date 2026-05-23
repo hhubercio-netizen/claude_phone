@@ -70,7 +70,7 @@ Create `gateway-dev.toml`:
 bind_addr = "127.0.0.1:8080"
 static_dir = "web/dist"
 api_keys = ["PASTE_KEY_FROM_STEP_1"]
-session_idle_timeout_secs = 300
+session_idle_timeout_secs = 604800  # 7 days; resets on phone attach
 max_sessions = 4
 log_format = "pretty"
 ```

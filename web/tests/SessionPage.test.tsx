@@ -107,7 +107,12 @@ describe('SessionPage', () => {
     expect(payload.rows).toBe(24);
   });
 
-  it('sends phone_hello only once even if the open event fires multiple times', () => {
+  it('re-sends phone_hello on every open so reconnects land on a fresh socket', () => {
+    // The reconnecting WS hook closes and reopens the underlying socket on
+    // backoff. The gateway expects phone_hello as the FIRST message on each
+    // fresh socket, so we deliberately re-send it on every open event. The
+    // sticky-session machinery on the server matches us back to the same
+    // Session by token and replays buffered output.
     renderAt(`/s/${VALID_TOKEN}`);
     act(() => {
       MockWebSocket.last()!.simulateOpen();
@@ -115,8 +120,13 @@ describe('SessionPage', () => {
     act(() => {
       MockWebSocket.last()!.simulateOpen();
     });
-    // helloSent gates re-send
-    expect(MockWebSocket.last()!.sent.length).toBe(1);
+    const sent = MockWebSocket.last()!.sent;
+    expect(sent.length).toBe(2);
+    for (const payload of sent) {
+      const parsed = JSON.parse(payload as string);
+      expect(parsed.type).toBe('phone_hello');
+      expect(parsed.token).toBe(VALID_TOKEN);
+    }
   });
 
   it('stores server_session_id and peer_connected on server_hello', () => {

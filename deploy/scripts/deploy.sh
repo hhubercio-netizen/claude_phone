@@ -52,7 +52,7 @@ api_keys = [
     # Generate one with:  openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
     # Paste here (exactly 43 chars).
 ]
-session_idle_timeout_secs = 300
+session_idle_timeout_secs = 604800
 max_sessions = 32
 log_format = "json"
 EOF

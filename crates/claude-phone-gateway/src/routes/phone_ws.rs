@@ -91,30 +91,57 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
     let (mut sink, mut stream) = socket.split();
     let mut rx_from_wrapper = handle.rx;
     let to_wrapper = handle.session.to_wrapper.clone();
+    let cancel = handle.session.cancel.clone();
 
+    let cancel_outgoing = cancel.clone();
     let outgoing_task = tokio::spawn(async move {
-        while let Some(msg) = stream.next().await {
-            let Ok(msg) = msg else { break };
-            let frame = match msg {
-                Message::Binary(b) => Frame::Binary(b),
-                Message::Text(t) => Frame::Text(t),
-                Message::Close(_) => break,
-                _ => continue,
-            };
-            if to_wrapper.send(frame).await.is_err() {
-                break;
+        loop {
+            let cancelled = cancel_outgoing.cancelled();
+            tokio::pin!(cancelled);
+            tokio::select! {
+                biased;
+                _ = &mut cancelled => break,
+                msg = stream.next() => {
+                    let Some(Ok(msg)) = msg else { break };
+                    let frame = match msg {
+                        Message::Binary(b) => Frame::Binary(b),
+                        Message::Text(t) => Frame::Text(t),
+                        Message::Close(_) => break,
+                        _ => continue,
+                    };
+                    if to_wrapper.send(frame).await.is_err() { break; }
+                }
             }
         }
     });
 
+    let cancel_incoming = cancel.clone();
     let incoming_task = tokio::spawn(async move {
-        while let Some(frame) = rx_from_wrapper.recv().await {
-            let msg = match frame {
-                Frame::Binary(b) => Message::Binary(b),
-                Frame::Text(t) => Message::Text(t),
-            };
-            if sink.send(msg).await.is_err() {
-                break;
+        // 30s server-initiated Ping keeps the phone's WebSocket alive across
+        // NAT and Cloudflare's idle-connection drop (~100s). Pong replies
+        // arrive through the same socket; axum dispatches them silently.
+        let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(30));
+        keepalive.tick().await; // skip immediate tick
+
+        loop {
+            let cancelled = cancel_incoming.cancelled();
+            tokio::pin!(cancelled);
+            tokio::select! {
+                biased;
+                _ = &mut cancelled => break,
+                frame = rx_from_wrapper.recv() => {
+                    let Some(frame) = frame else { break };
+                    let msg = match frame {
+                        Frame::Binary(b) => Message::Binary(b),
+                        Frame::Text(t) => Message::Text(t),
+                    };
+                    if sink.send(msg).await.is_err() { break; }
+                }
+                _ = keepalive.tick() => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -125,6 +152,9 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
         let mut slot = handle.session.to_phone.lock().await;
         slot.detach();
     }
+    // Reset the idle clock — sweeper measures elapsed time from THIS instant
+    // for sessions that are currently phone-less.
+    handle.session.touch_phone().await;
     let peer_down = ControlMessage::PeerStatus(PeerStatus { connected: false });
     let _ = handle
         .session

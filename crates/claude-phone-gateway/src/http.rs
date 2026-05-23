@@ -32,6 +32,30 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
     let registry = Arc::new(SessionRegistry::new(config.max_sessions));
     let allowed_keys: Arc<Vec<ApiKey>> = Arc::new(config.api_keys.clone());
 
+    // Phone-idle sweeper. Runs for the lifetime of the process; drops any
+    // session whose phone has been gone for >= session_idle_timeout_secs.
+    // Sweep interval is min(60s, timeout/4) so short timeouts (tests, dev)
+    // still get acted on promptly.
+    let idle_timeout = std::time::Duration::from_secs(config.session_idle_timeout_secs);
+    let sweep_interval = std::cmp::min(
+        std::time::Duration::from_secs(60),
+        std::cmp::max(std::time::Duration::from_secs(1), idle_timeout / 4),
+    );
+    {
+        let registry = registry.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(sweep_interval);
+            ticker.tick().await; // skip immediate tick
+            loop {
+                ticker.tick().await;
+                let dropped = registry.sweep_expired(idle_timeout).await;
+                if dropped > 0 {
+                    tracing::info!(dropped, "idle sweeper dropped expired sessions");
+                }
+            }
+        });
+    }
+
     let wrapper_state = wrapper_ws::WrapperWsState {
         registry: registry.clone(),
         allowed_keys,
