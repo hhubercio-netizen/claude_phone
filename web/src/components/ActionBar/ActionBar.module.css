@@ -21,7 +21,12 @@
   background: var(--cl-input-bg);
   border: 1px solid var(--cl-panel-border);
   color: var(--cl-fg);
-  font-family: inherit;
+  /* sans-serif system stack — guaranteed coverage for the arrow glyphs
+     (↑↓←→↵) we use as labels. Inheriting the page's monospace font caused
+     arrows to fall through to a font that lacked them and render as a
+     stray "L" or "*" tofu. */
+  font-family: system-ui, -apple-system, 'Segoe UI Symbol', 'Apple Color Emoji',
+    sans-serif;
   font-size: 14px;
   -webkit-tap-highlight-color: transparent;
   user-select: none;

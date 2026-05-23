@@ -223,6 +223,52 @@ describe('SessionPage', () => {
     spy.mockRestore();
   });
 
+  it('round-trips a choice prompt: terminal output → user picks a digit → wrapper sees the digit', () => {
+    // End-to-end shape of a typical claude prompt: claude writes
+    //   "Choose 1, 2 or 3:"  to the PTY, the phone receives it as a binary
+    // frame, the user taps "2" on the soft keyboard, the wrapper sees "2".
+    // Test that ALL three hops survive: gateway → write handle, input
+    // → sendBinary, and the byte the wrapper sees is exactly the digit the
+    // user pressed (not e.g. a stale key from before phone_hello).
+    const written: Uint8Array[] = [];
+    lastWriteHandleRef.current = (b) => written.push(b);
+    renderAt(`/s/${VALID_TOKEN}`);
+    act(() => {
+      MockWebSocket.last()!.simulateOpen();
+      MockWebSocket.last()!.simulateMessage(
+        encodeControlMessage({
+          type: 'server_hello',
+          session_id: 'sess-choice',
+          peer_connected: true,
+        }),
+      );
+    });
+    // claude writes the prompt
+    const prompt = new TextEncoder().encode('Choose 1, 2 or 3: ');
+    act(() => {
+      MockWebSocket.last()!.simulateMessage(prompt.buffer);
+    });
+    // The terminal received exactly what the wrapper sent.
+    expect(written.length).toBe(1);
+    expect(new TextDecoder().decode(written[0])).toBe('Choose 1, 2 or 3: ');
+
+    // The user taps "2" on the on-screen keyboard. xterm forwards the
+    // keystroke to onInputBytes.
+    act(() => {
+      inputHandlerRef.current!(new Uint8Array([0x32])); // ASCII "2"
+    });
+
+    // What the wrapper actually receives over the wire: first phone_hello
+    // (JSON), then the user's digit (binary). Assert both, and assert the
+    // binary frame holds exactly "2" so a future regression that injected
+    // extra bytes (newline, encoding noise) would fail loudly.
+    const sent = MockWebSocket.last()!.sent;
+    expect(sent.length).toBe(2);
+    expect(JSON.parse(sent[0] as string).type).toBe('phone_hello');
+    expect(sent[1]).toBeInstanceOf(Uint8Array);
+    expect(Array.from(sent[1] as Uint8Array)).toEqual([0x32]);
+  });
+
   it('does not leak the token via document.title, localStorage, or sessionStorage', () => {
     renderAt(`/s/${VALID_TOKEN}`);
     act(() => {

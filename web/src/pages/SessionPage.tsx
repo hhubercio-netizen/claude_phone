@@ -163,7 +163,10 @@ function SessionHeader({ wsState, fontSize, onFontInc, onFontDec, onPaste }: Hea
         </span>
       </div>
       <div className="flex items-center gap-1">
-        <HeaderBtn label="A−" onClick={onFontDec} ariaLabel="Decrease font size" />
+        {/* ASCII hyphen instead of U+2212 (−) — the unicode minus is missing
+            from several mobile monospace fallbacks and renders as a tofu
+            box that reads as a stray "L" or "*" character. */}
+        <HeaderBtn label="A-" onClick={onFontDec} ariaLabel="Decrease font size" />
         <span className="text-claude-muted tabular-nums w-6 text-center">{fontSize}</span>
         <HeaderBtn label="A+" onClick={onFontInc} ariaLabel="Increase font size" />
         <HeaderBtn label="Paste" onClick={onPaste} ariaLabel="Open paste dialog" />

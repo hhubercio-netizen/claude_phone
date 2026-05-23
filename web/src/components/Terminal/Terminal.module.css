@@ -23,7 +23,10 @@
   background: var(--cl-panel-bg);
   color: var(--cl-fg);
   font-size: 12px;
-  font-family: inherit;
+  /* sans-serif system stack so the ↓ arrow glyph always resolves; inheriting
+     the page-level monospace stack falls through to fonts without the
+     arrow on some Android builds. */
+  font-family: system-ui, -apple-system, 'Segoe UI Symbol', sans-serif;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
   cursor: pointer;
   user-select: none;

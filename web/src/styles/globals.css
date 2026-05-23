@@ -8,13 +8,30 @@
 @tailwind utilities;
 
 html, body, #root {
-  height: 100%;
   margin: 0;
   background: var(--cl-bg);
   color: var(--cl-fg);
-  font-family: 'JetBrains Mono', Menlo, Consolas, monospace;
+  /* ui-monospace first so iOS/macOS resolve to SF Mono (has arrows/Unicode
+     minus); JetBrains Mono only loads if user has it installed. Default
+     monospace on Android often lacks ↑↓←→↵ and U+2212 (−) and the browser
+     replaces them with tofu/fallback glyphs that read as "L" or "*". */
+  font-family: ui-monospace, 'JetBrains Mono', 'SF Mono', Menlo, Consolas,
+    'Cascadia Mono', 'Roboto Mono', monospace;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: contain;
+  /* Lock the app to the visual viewport so the mobile keyboard cannot scroll
+     the page when xterm focuses its hidden textarea. Without overflow:hidden
+     iOS Safari scrolls the body to keep the offscreen helper-textarea in
+     view, dragging the entire UI off-screen — what the user sees as the
+     "whole screen turns black with no way back". 100dvh = dynamic viewport
+     height which shrinks as the keyboard slides in; older iOS without dvh
+     support falls back to the inherited 100% chain. */
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 body {
