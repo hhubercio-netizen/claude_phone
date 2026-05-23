@@ -316,6 +316,100 @@ async fn phone_ws_allows_missing_origin_when_public_origin_set() {
 }
 
 #[tokio::test]
+async fn wrapper_ws_rejects_wrong_origin() {
+    let api_key = ApiKey::generate();
+    let port = spawn_test_gateway_with_origin(
+        api_key.clone(),
+        Some("https://claude-phone.pl".to_string()),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let req = ws_request_with_origin(
+        &format!("ws://127.0.0.1:{port}/api/wrapper"),
+        "https://evil.example.com",
+    );
+    let err = tokio_tungstenite::connect_async(req)
+        .await
+        .expect_err("mismatched Origin on wrapper WS must be rejected");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("403") || msg.to_lowercase().contains("forbidden"),
+        "expected 403/forbidden, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn wrapper_ws_accepts_matching_origin() {
+    let api_key = ApiKey::generate();
+    let expected_origin = "https://claude-phone.pl".to_string();
+    let port = spawn_test_gateway_with_origin(api_key.clone(), Some(expected_origin.clone())).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let req = ws_request_with_origin(
+        &format!("ws://127.0.0.1:{port}/api/wrapper"),
+        &expected_origin,
+    );
+    let (mut wrapper_ws, _) = tokio_tungstenite::connect_async(req)
+        .await
+        .expect("matching Origin on wrapper WS should succeed");
+
+    let hello = ControlMessage::WrapperHello(WrapperHello {
+        api_key: api_key.clone(),
+        token: SessionToken::generate(),
+        cols: 80,
+        rows: 24,
+    });
+    wrapper_ws
+        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+
+    let resp = wrapper_ws.next().await.unwrap().unwrap();
+    let text = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected text frame, got {other:?}"),
+    };
+    let msg: ControlMessage = serde_json::from_str(&text).unwrap();
+    assert!(matches!(msg, ControlMessage::ServerHello(_)));
+}
+
+#[tokio::test]
+async fn wrapper_ws_hello_timeout_drops_idle_socket() {
+    // Slow-loris defense: a wrapper client that completes the WS upgrade but
+    // never sends a WrapperHello must have its socket reaped after
+    // HELLO_TIMEOUT (10s in production). To keep the test fast we don't wait
+    // the full 10s — we connect, never send hello, and assert the server
+    // closes the stream within a bounded window (16s envelope). The negative
+    // assertion (server holds the socket forever) would obviously hang.
+    let api_key = ApiKey::generate();
+    let port = spawn_test_gateway(api_key).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+
+    // Don't send anything. Wait for the server to give up.
+    let closed = tokio::time::timeout(Duration::from_secs(16), async {
+        loop {
+            match wrapper_ws.next().await {
+                None => break,
+                Some(Err(_)) => break,
+                Some(Ok(Message::Close(_))) => break,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert!(
+        closed.is_ok(),
+        "gateway must close idle wrapper WS within HELLO_TIMEOUT envelope"
+    );
+}
+
+#[tokio::test]
 async fn phone_ws_rejects_malformed_token_length() {
     // Strict length check: anything other than SessionToken::LEN gets a 400
     // before we even allocate the WS upgrade machinery. This is the cheap

@@ -59,6 +59,7 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
     let wrapper_state = wrapper_ws::WrapperWsState {
         registry: registry.clone(),
         allowed_keys,
+        public_origin: config.public_origin.clone(),
     };
 
     let phone_state = phone_ws::PhoneWsState {

@@ -134,9 +134,14 @@ async fn main() -> anyhow::Result<()> {
                             tracing::warn!("pair triggered but no token in session; ignoring");
                             continue;
                         };
-                        let public_url = s.public_url.clone();
+                        // NB: do NOT log public_url with ?fmt — it contains the
+                        // session token inside the path and tracing::fmt would
+                        // write it to wrapper.log in cleartext. We only confirm
+                        // its presence; the URL itself is delivered to the user
+                        // via the QR/pair output, not the log.
+                        let has_public_url = s.public_url.is_some();
                         drop(s);
-                        tracing::info!(?public_url, "pair triggered; connecting to gateway");
+                        tracing::info!(has_public_url, "pair triggered; connecting to gateway");
 
                         if let Some((cancel, handle)) = active.take() {
                             tracing::info!("preempting previous bridge");

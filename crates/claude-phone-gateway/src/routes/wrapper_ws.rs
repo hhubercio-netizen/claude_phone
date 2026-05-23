@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::Response;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
 
 use claude_phone_shared::protocol::{ControlMessage, ErrorCode, ErrorMessage, ServerHello};
@@ -14,13 +15,36 @@ use crate::session::{Frame, SessionRegistry};
 pub struct WrapperWsState {
     pub registry: Arc<SessionRegistry>,
     pub allowed_keys: Arc<Vec<claude_phone_shared::ApiKey>>,
+    /// When `Some`, browser-initiated WSes whose `Origin` header doesn't
+    /// equal this value are rejected with 403. Mirrors phone_ws — defense in
+    /// depth against CSWSH where a malicious page running in a victim's
+    /// browser tries to mount a wrapper session.
+    pub public_origin: Option<String>,
 }
 
 /// See phone_ws::MAX_WS_MESSAGE_BYTES — wrapper carries PTY chunks (8KB) and
 /// JSON control messages (small). 64KB caps DoS surface from a malicious peer.
 const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
 
-pub async fn handler(ws: WebSocketUpgrade, State(state): State<WrapperWsState>) -> Response {
+/// Hard wall-clock budget for the wrapper to deliver its `WrapperHello` after
+/// the WebSocket upgrade completes. Without this a slow-loris client could
+/// hold sockets open indefinitely, costing file descriptors and tying up
+/// axum's accept queue. Real wrappers send hello within milliseconds.
+const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+pub async fn handler(
+    ws: WebSocketUpgrade,
+    headers: HeaderMap,
+    State(state): State<WrapperWsState>,
+) -> Response {
+    if let Some(expected) = state.public_origin.as_deref() {
+        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
+            if origin != expected {
+                return StatusCode::FORBIDDEN.into_response();
+            }
+        }
+    }
+
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
         .on_upgrade(move |socket| handle_socket(socket, state))
@@ -161,7 +185,13 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
 }
 
 async fn recv_hello(socket: &mut WebSocket) -> Option<ControlMessage> {
-    let msg = socket.recv().await?.ok()?;
+    // Bounded wait so an idle peer can't pin a socket FD forever. timeout()
+    // returns Err on elapse and Ok(None) when the stream closes cleanly —
+    // both are treated as "no hello, hang up" here.
+    let msg = tokio::time::timeout(HELLO_TIMEOUT, socket.recv())
+        .await
+        .ok()??
+        .ok()?;
     let Message::Text(t) = msg else { return None };
     serde_json::from_str(&t).ok()
 }

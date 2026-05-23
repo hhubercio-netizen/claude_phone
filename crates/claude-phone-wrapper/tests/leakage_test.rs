@@ -86,6 +86,33 @@ async fn tracing_does_not_leak_api_key_on_gateway_connect_failure() {
 }
 
 #[test]
+fn pair_response_debug_redacts_token_url_and_qr() {
+    // PairResponse used to derive Debug, which would print `token`,
+    // bearer-equivalent `url`, and the entire `qr_ascii` block (the QR
+    // *encodes* the token URL — its bytes ARE the secret). Forward-looking
+    // enforcement: if anyone re-derives Debug or adds a `#[derive(Debug)]`
+    // back to the type, this test breaks.
+    let resp = PairResponse {
+        url: "https://example.com/s/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        token: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        qr_ascii: "█████ token-encoded-here █████".into(),
+    };
+    let dbg = format!("{:?}", resp);
+    assert!(
+        !dbg.contains("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        "PairResponse Debug leaked token-shaped value: {dbg}"
+    );
+    assert!(
+        !dbg.contains("token-encoded-here"),
+        "PairResponse Debug leaked qr_ascii contents: {dbg}"
+    );
+    assert!(
+        dbg.contains("<redacted>"),
+        "PairResponse Debug must use a visible redaction marker: {dbg}"
+    );
+}
+
+#[test]
 fn debug_session_state_does_not_leak_public_url_if_token_in_it() {
     // The public URL contains the token as its last segment, so the URL
     // is itself sensitive. SessionState::Debug must redact it OR omit it.

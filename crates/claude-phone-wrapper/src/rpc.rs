@@ -18,11 +18,25 @@ use claude_phone_shared::ApiKey;
 use crate::qr;
 use crate::session::SessionState;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct PairResponse {
     pub url: String,
     pub token: String,
     pub qr_ascii: String,
+}
+
+/// Manual Debug that redacts `token`, the token-bearing `url`, and the
+/// `qr_ascii` block (the QR encodes the token URL — its bytes ARE the secret).
+/// Without this, `tracing::debug!(?response, ...)` anywhere on the wrapper
+/// side would write the bearer-equivalent token to wrapper.log.
+impl std::fmt::Debug for PairResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PairResponse")
+            .field("url", &"<redacted>")
+            .field("token", &"<redacted>")
+            .field("qr_ascii", &format!("<{} bytes>", self.qr_ascii.len()))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
