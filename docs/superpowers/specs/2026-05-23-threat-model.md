@@ -755,7 +755,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 |------------|---------------------------------------------------------------------------------------------|--------|
 | TM-LEAK.1  | CI grep: tracing macros with secret-named fields fail build                                  | TODO   |
 | TM-LEAK.2  | CI grep heuristic: derived Debug on container with secret-named field flagged for review     | TODO   |
-| TM-LEAK.3  | CI grep / list: asymmetric guards across routes (Origin missing on routes that should have it) | TODO  |
+| TM-LEAK.3  | CI grep / list: asymmetric guards across routes (Origin missing on routes that should have it) | GREEN (scripts/asymmetric_guards.sh wired into CI via scripts/security_invariants.sh) |
 | TM-LEAK.4  | TM-to-code coverage matrix: every TM-CAT.N appears as comment in code or test               | TODO   |
 
 ---

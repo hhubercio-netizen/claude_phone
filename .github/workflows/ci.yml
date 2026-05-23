@@ -25,6 +25,10 @@ jobs:
       # TM-CODE.5 — block unbounded tokio channels in prod (slow-leak DoS).
       - name: TM-CODE.5 — unbounded-channel gate
         run: bash scripts/check_unbounded_channels.sh
+      # TM-LEAK.3 — assert WS guards stay symmetric across phone/wrapper
+      # routes, or have an explicit asymmetric carveout in the sweep script.
+      - name: TM-LEAK.3 — asymmetric WS guards
+        run: bash scripts/security_invariants.sh
 
   cargo-audit:
     name: cargo audit
