@@ -672,7 +672,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-SUPPLY.1 | cargo-audit + npm-audit in CI                                                               | GREEN  |
 | TM-SUPPLY.2 | Cargo.lock + package-lock.json committed (lockfile pinning)                                 | GREEN  |
 | TM-SUPPLY.3 | Dependabot weekly for cargo + npm + github-actions                                          | GREEN  |
-| TM-SUPPLY.4 | `cargo-deny` config (licenses, advisories, bans, sources allowlist)                         | TODO   |
+| TM-SUPPLY.4 | `cargo-deny` config (licenses, advisories via cargo-audit, bans wildcards, sources allowlist) | GREEN  |
 | TM-SUPPLY.5 | Subresource Integrity (SRI) for any CDN assets — verify all self-hosted                     | VERIFY |
 
 ### Infrastructure (TM-INFRA)

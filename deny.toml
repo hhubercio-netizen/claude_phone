@@ -1,0 +1,64 @@
+# TM-SUPPLY.4 — supply-chain lock for the claude-phone workspace.
+#
+# cargo-deny enforces four invariants on every CI build:
+#   1. No transitively-pulled-in advisory CVEs (`[advisories]`).
+#   2. Every license in the dependency tree is on the allow-list
+#      (`[licenses]`). New transitive licenses fail the build instead
+#      of silently landing.
+#   3. No dependency from an unknown registry or git source — we only
+#      trust crates.io (`[sources]`).
+#   4. No wildcard version requirements (`wildcards = "deny"`) — these
+#      defeat lockfile reproducibility and let an upstream squat ship
+#      surprise major bumps into a green CI.
+#
+# Multiple versions of the same crate are a "warn" rather than "deny":
+# in practice transitive duplicates are common and forcing dedup wastes
+# review time without a security benefit.
+
+[graph]
+all-features = false
+
+# Advisories check is wired up here but executed by the dedicated
+# `cargo-audit` job in CI (.github/workflows/ci.yml). Running it twice
+# would slow CI without adding signal — cargo-audit and cargo-deny share
+# the RustSec advisory DB. Kept in this file so a developer running
+# `cargo deny check` locally still gets advisory output.
+[advisories]
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+exceptions = []
+unused-allowed-license = "allow"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal workspace path-deps (e.g. claude-phone-gateway → ../claude-phone-shared)
+# are emitted as wildcards by cargo metadata even though they're locked to the
+# workspace version. `allow-wildcard-paths` exempts only those, while keeping
+# the deny for external `version = "*"` requests (which is the actual risk).
+allow-wildcard-paths = true
+deny = []
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

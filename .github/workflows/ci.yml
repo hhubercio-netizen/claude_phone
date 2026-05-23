@@ -37,6 +37,19 @@ jobs:
         run: cargo install --locked cargo-audit
       - run: cargo audit --deny warnings
 
+  cargo-deny:
+    name: cargo deny (TM-SUPPLY.4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # Advisories are covered by the dedicated `cargo-audit` job above.
+          # cargo-deny adds licenses / bans / sources on top — splitting the
+          # two databases means a transient flake in one (e.g. an unsupported
+          # CVSS-4.0 entry in RustSec) doesn't block license/source review.
+          command: check licenses bans sources
+
   web:
     name: Web
     runs-on: ubuntu-latest

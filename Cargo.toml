@@ -12,6 +12,13 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.87"
 license = "MIT"
+# TM-SUPPLY.4 — workspace is intentionally not publishable to crates.io.
+# Setting `publish = false` here propagates to every member via
+# `publish.workspace = true` in their [package] sections. Side benefit:
+# `cargo-deny`'s `allow-wildcard-paths` only exempts internal path-deps
+# of non-public crates, so this is what makes `wildcards = "deny"`
+# tractable for the workspace.
+publish = false
 repository = "https://github.com/hhubercio-netizen/claude_phone"
 
 [workspace.dependencies]
