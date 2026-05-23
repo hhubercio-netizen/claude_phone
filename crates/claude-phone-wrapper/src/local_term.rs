@@ -17,6 +17,15 @@ pub struct RawModeGuard;
 
 impl RawModeGuard {
     pub fn enable() -> anyhow::Result<Self> {
+        // crossterm::enable_raw_mode on Windows only flips stdin into VT-input
+        // mode; it does NOT enable ENABLE_VIRTUAL_TERMINAL_PROCESSING on
+        // stdout. Without that flag, the child's ANSI escape sequences
+        // (cursor moves, SGR colour codes, screen clears) are written through
+        // to the console literally, so the user sees `←[2J←[H` text instead
+        // of a rendered TUI. `crossterm::ansi_support::supports_ansi()` is
+        // the public hook that, as a side-effect, enables VT processing on
+        // the current stdout handle (once per process via `Once`).
+        let _ = crossterm::ansi_support::supports_ansi();
         crossterm::terminal::enable_raw_mode()
             .map_err(|e| anyhow::anyhow!("enable_raw_mode failed: {e}"))?;
         Ok(Self)
