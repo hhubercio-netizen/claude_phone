@@ -46,14 +46,18 @@ pub async fn handler(
         return StatusCode::BAD_REQUEST.into_response();
     }
 
-    // Defense-in-depth Origin check. Only fires when the deployer set
-    // `public_origin` in gateway.toml AND the client sent an `Origin`
-    // header (browsers always do; non-browser clients may not).
+    // TM-WS.1, .2 — Origin equality check when public_origin is configured.
+    // TM-WS.3 — fail-closed on MISSING Origin: phone_ws is browser-served
+    // (the page at /s/:token opens a same-origin WebSocket), so a legitimate
+    // browser always sends Origin. A missing Origin is either a non-browser
+    // client probing the endpoint with a stolen token, or a browser quirk
+    // we don't support. Both deserve 403. Wrapper_ws deliberately stays
+    // permissive — wrappers are CLI processes that don't send Origin.
     if let Some(expected) = state.public_origin.as_deref() {
-        if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
-            if origin != expected {
-                return StatusCode::FORBIDDEN.into_response();
-            }
+        let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+        match origin {
+            Some(o) if o == expected => {}
+            _ => return StatusCode::FORBIDDEN.into_response(),
         }
     }
 

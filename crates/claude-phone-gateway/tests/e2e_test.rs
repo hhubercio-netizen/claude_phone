@@ -272,10 +272,14 @@ async fn phone_ws_rejects_wrong_origin() {
 }
 
 #[tokio::test]
-async fn phone_ws_allows_missing_origin_when_public_origin_set() {
-    // Non-browser clients (server bridges, CLIs) may not send Origin at all.
-    // Public Origin enforcement must only fire when the client actually sends
-    // one, otherwise we'd lock out legitimate non-browser callers.
+async fn phone_ws_rejects_missing_origin_when_public_origin_set() {
+    // TM-WS.3 — phone_ws is browser-served (the page at /s/:token opens a
+    // same-origin WebSocket), so a legitimate browser always sends Origin.
+    // A missing Origin when public_origin is configured is either a
+    // non-browser client probing with a stolen token, or a stripped
+    // header. Both deserve 403. Wrapper_ws keeps the CLI-client carveout
+    // (covered by wrapper_ws_accepts_matching_origin and the websocket.rs
+    // wrapper_ws_allows_missing_origin_even_when_public_origin_configured).
     let api_key = ApiKey::generate();
     let token = SessionToken::generate();
     let port = spawn_test_gateway_with_origin(
@@ -285,37 +289,22 @@ async fn phone_ws_allows_missing_origin_when_public_origin_set() {
     .await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let (mut wrapper_ws, _) =
-        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
-            .await
-            .expect("wrapper connect");
-    let hello = ControlMessage::WrapperHello(WrapperHello {
-        api_key: api_key.clone(),
-        token: token.clone(),
-        cols: 80,
-        rows: 24,
-    });
-    wrapper_ws
-        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
-        .await
-        .unwrap();
-    let _ = wrapper_ws.next().await.unwrap().unwrap();
-
     // tokio_tungstenite's plain URL form doesn't add Origin.
-    let (mut phone_ws, _) = tokio_tungstenite::connect_async(format!(
+    let err = tokio_tungstenite::connect_async(format!(
         "ws://127.0.0.1:{port}/api/phone/{}",
         token.as_str()
     ))
     .await
-    .expect("phone connect without origin should succeed");
-
-    let resp = phone_ws.next().await.unwrap().unwrap();
-    let text = match resp {
-        Message::Text(t) => t,
-        other => panic!("expected text frame, got {other:?}"),
+    .expect_err("phone connect without Origin must be rejected when public_origin is set");
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("expected Http error, got: {other:?}"),
     };
-    let msg: ControlMessage = serde_json::from_str(&text).unwrap();
-    assert!(matches!(msg, ControlMessage::ServerHello(_)));
+    assert_eq!(
+        status.as_u16(),
+        403,
+        "TM-WS.3: missing Origin on phone_ws must yield 403, got {status:?}"
+    );
 }
 
 #[tokio::test]

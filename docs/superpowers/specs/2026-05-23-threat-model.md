@@ -715,7 +715,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 |------------|---------------------------------------------------------------------------------------------|---------|
 | TM-WS.1    | Origin enforcement on `/api/wrapper`                                                        | GREEN   |
 | TM-WS.2    | Origin enforcement on `/api/phone/:token`                                                   | GREEN   |
-| TM-WS.3    | Fail-closed on **missing** Origin when `public_origin` configured                           | TODO    |
+| TM-WS.3    | Fail-closed on **missing** Origin when `public_origin` configured                           | GREEN (phone_ws.rs, fail-closed on missing Origin) |
 | TM-WS.4    | `max_message_size = 64 KB`                                                                   | GREEN   |
 | TM-WS.5    | `max_frame_size = 64 KB`                                                                     | GREEN   |
 | TM-WS.6    | 30 s server-initiated Ping keepalive                                                         | GREEN   |
