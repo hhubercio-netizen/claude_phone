@@ -158,36 +158,51 @@ impl BridgeSink for GatewaySinkAdapter {
     }
 }
 
-/// Wraps a locked `PtySession` guard.
-pub struct PtyGuardAdapter {
-    pub guard: tokio::sync::OwnedMutexGuard<PtySession>,
+/// Bridges PTY ↔ gateway using a shared [`PtySession`] and an independent
+/// broadcast subscription. Multiple bridges can run simultaneously (one per
+/// paired phone), and the local terminal continues observing the same byte
+/// stream because the PTY's reader is fan-out, not single-consumer.
+pub struct PtyChannelAdapter {
+    pub pty: std::sync::Arc<PtySession>,
+    pub reader: tokio::sync::broadcast::Receiver<Vec<u8>>,
 }
 
 #[async_trait::async_trait]
-impl BridgePty for PtyGuardAdapter {
+impl BridgePty for PtyChannelAdapter {
     async fn read_chunk(&mut self) -> Option<Vec<u8>> {
-        self.guard.read().await
+        use tokio::sync::broadcast::error::RecvError;
+        loop {
+            match self.reader.recv().await {
+                Ok(b) => return Some(b),
+                // Slow consumer — broadcast dropped some chunks. Continue so
+                // the bridge keeps moving; phone will repaint on next PTY
+                // output. (Terminating the bridge here would drop the phone
+                // off the session every time the user holds down a key.)
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => return None,
+            }
+        }
     }
     async fn write_chunk(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        self.guard.write_all(data).await
+        self.pty.write_all(data).await
     }
     fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.guard.resize(cols, rows)
+        self.pty.resize(cols, rows)
     }
 }
 
-/// Backwards-compatible entry point used by `main.rs`. `shutdown` lets the
-/// caller preempt the bridge so a new `/pair` can take the PTY lock that this
-/// bridge currently holds.
-pub async fn run_via_locked(
+/// Entry point used by `main.rs`. `shutdown` lets the caller preempt this
+/// bridge when a new `/pair` arrives.
+pub async fn run_via_pty(
     client: GatewayClient,
-    pty_guard: tokio::sync::OwnedMutexGuard<PtySession>,
+    pty: std::sync::Arc<PtySession>,
     shutdown: oneshot::Receiver<()>,
 ) -> anyhow::Result<()> {
     let stream = GatewayStreamAdapter {
         inner: client.stream,
     };
     let sink = GatewaySinkAdapter { inner: client.sink };
-    let pty = PtyGuardAdapter { guard: pty_guard };
-    run(stream, sink, pty, shutdown).await
+    let reader = pty.subscribe();
+    let adapter = PtyChannelAdapter { pty, reader };
+    run(stream, sink, adapter, shutdown).await
 }

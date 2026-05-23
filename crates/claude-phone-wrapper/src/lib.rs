@@ -2,6 +2,7 @@ pub mod bridge;
 pub mod cli;
 pub mod config;
 pub mod gateway_client;
+pub mod local_term;
 pub mod pty;
 pub mod qr;
 pub mod rpc;

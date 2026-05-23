@@ -1,24 +1,66 @@
 use std::io::{Read, Write};
+use std::sync::Mutex;
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use tokio::sync::mpsc;
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::spawn_blocking;
 
+/// A wrapped child process running inside a PTY.
+///
+/// The PTY's output is fan-out via a `tokio::sync::broadcast` channel so the
+/// local terminal (when the wrapper runs interactively) AND the gateway
+/// bridge (when a phone is paired) can both observe the same byte stream.
+/// Writes are funnelled through a single `mpsc` channel that is drained on a
+/// background blocking thread, so multiple async writers can call `write_all`
+/// concurrently without external synchronisation.
 pub struct PtySession {
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    _child: Box<dyn Child + Send + Sync>,
-    reader_rx: mpsc::Receiver<Vec<u8>>,
+    // Behind a Mutex only because `MasterPty: !Sync` — `resize()` is rare,
+    // so contention is irrelevant.
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    writer_tx: mpsc::Sender<Vec<u8>>,
+    reader_bcast: broadcast::Sender<Vec<u8>>,
+    /// Sticky exit signal flipped to `true` by the child-wait watcher when
+    /// the wrapped process terminates (and as a fallback by the reader task
+    /// on PTY EOF). Sticky semantics matter: late `wait_exit()` callers must
+    /// still observe an already-occurred exit, which `watch` provides via
+    /// `borrow()` but `Notify::notify_waiters` does not (it has no stored
+    /// permit, so a notify with zero waiters is lost).
+    exit_tx: watch::Sender<bool>,
+    // Killer is retained so PtySession::drop terminates the child even if it
+    // is still running. The owning `Child` lives on the wait-watcher thread
+    // (see `spawn`), which calls `wait()` on it and signals `exit`. On Windows
+    // ConPTY, the master reader does not necessarily EOF when the child
+    // exits, so we cannot rely solely on the reader thread's EOF to fire
+    // `exit` — the wait-watcher is the primary signal.
+    killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+}
+
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        if let Ok(mut k) = self.killer.lock() {
+            let _ = k.kill();
+        }
+    }
 }
 
 impl PtySession {
+    /// Spawn `program` with `args` inside a fresh PTY sized to `cols x rows`.
+    ///
+    /// `extra_env` is applied AFTER the inherited environment is filtered by
+    /// [`env_is_forwardable`] — it is the only path by which `CLAUDE_PHONE_*`
+    /// vars reach the child, and we use it to inject `CLAUDE_PHONE_RPC_URL`.
+    ///
+    /// Returns the session plus the **first broadcast subscription**. Holding
+    /// this receiver before any other code runs guarantees no early child
+    /// output is dropped on the floor — late subscribers (e.g. the gateway
+    /// bridge after `/pair`) join the stream from the current head.
     pub fn spawn(
         program: &str,
         args: &[&str],
         cols: u16,
         rows: u16,
         extra_env: &[(&str, &str)],
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<(Self, broadcast::Receiver<Vec<u8>>)> {
         let pty_sys = native_pty_system();
         let pair = pty_sys.openpty(PtySize {
             rows,
@@ -57,62 +99,116 @@ impl PtySession {
             cmd.env(*k, *v);
         }
 
-        let child = pair.slave.spawn_command(cmd)?;
+        let mut child = pair.slave.spawn_command(cmd)?;
+        let killer = child.clone_killer();
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
-        let (tx, rx) = mpsc::channel::<Vec<u8>>(64);
+        // Reader fan-out. 256 slots * up to 8 KiB each gives ~2 MiB of buffer
+        // before a slow consumer starts losing data — plenty for an
+        // interactive TUI.
+        let (bcast_tx, first_rx) = broadcast::channel::<Vec<u8>>(256);
+        let bcast_for_reader = bcast_tx.clone();
+        let (exit_tx, _exit_rx) = watch::channel(false);
+        let exit_tx_for_reader = exit_tx.clone();
         spawn_blocking(move || {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        if tx.blocking_send(buf[..n].to_vec()).is_err() {
-                            break;
-                        }
+                        // `send` returns Err only when there are *no* live
+                        // receivers. In that case the bytes are dropped on
+                        // the floor, which is intentional: nobody is
+                        // listening, nothing to do.
+                        let _ = bcast_for_reader.send(buf[..n].to_vec());
                     }
                     Err(_) => break,
                 }
             }
+            let _ = exit_tx_for_reader.send(true);
         });
 
-        Ok(Self {
-            master: pair.master,
-            writer,
-            _child: child,
-            reader_rx: rx,
-        })
+        // Writer pump. We funnel async writes into a blocking thread so any
+        // number of tokio tasks can call `write_all` concurrently without an
+        // explicit Mutex on the writer side. Backpressure is bounded by the
+        // 128-slot channel.
+        let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
+        spawn_blocking(move || {
+            let mut writer = writer;
+            while let Some(chunk) = writer_rx.blocking_recv() {
+                if writer.write_all(&chunk).is_err() {
+                    break;
+                }
+                if writer.flush().is_err() {
+                    break;
+                }
+            }
+        });
+
+        // Child-wait watcher. On Windows ConPTY the master reader does not
+        // always EOF promptly after the child exits, so we cannot rely on
+        // the reader thread's EOF path alone — this watcher is the
+        // authoritative signal for `wait_exit`.
+        let exit_tx_for_child = exit_tx.clone();
+        spawn_blocking(move || {
+            let _ = child.wait();
+            let _ = exit_tx_for_child.send(true);
+        });
+
+        Ok((
+            Self {
+                master: Mutex::new(pair.master),
+                writer_tx,
+                reader_bcast: bcast_tx,
+                exit_tx,
+                killer: Mutex::new(killer),
+            },
+            first_rx,
+        ))
     }
 
-    pub async fn read(&mut self) -> Option<Vec<u8>> {
-        self.reader_rx.recv().await
+    /// Add a new subscriber to the PTY's output. Subscribers see only data
+    /// produced *after* they subscribe; for a complete view from t=0 use the
+    /// receiver returned by `spawn()`.
+    pub fn subscribe(&self) -> broadcast::Receiver<Vec<u8>> {
+        self.reader_bcast.subscribe()
     }
 
-    pub async fn write_all(&mut self, data: &[u8]) -> anyhow::Result<()> {
-        let owned = data.to_vec();
-        let writer = std::mem::replace(&mut self.writer, Box::new(std::io::sink()));
-        let writer = spawn_blocking(move || -> anyhow::Result<Box<dyn Write + Send>> {
-            let mut w = writer;
-            w.write_all(&owned)?;
-            w.flush()?;
-            Ok(w)
-        })
-        .await??;
-        self.writer = writer;
+    /// Enqueue `data` to be written to the PTY. Returns Err only if the
+    /// writer task has died (e.g. the PTY closed).
+    pub async fn write_all(&self, data: &[u8]) -> anyhow::Result<()> {
+        self.writer_tx
+            .send(data.to_vec())
+            .await
+            .map_err(|_| anyhow::anyhow!("pty writer channel closed"))?;
         Ok(())
     }
 
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.master.resize(PtySize {
+        let guard = self
+            .master
+            .lock()
+            .map_err(|_| anyhow::anyhow!("pty master mutex poisoned"))?;
+        guard.resize(PtySize {
             cols,
             rows,
             pixel_width: 0,
             pixel_height: 0,
         })?;
         Ok(())
+    }
+
+    /// Resolves when the child process has exited. Late callers observe
+    /// an already-occurred exit immediately (sticky watch semantics).
+    pub async fn wait_exit(&self) {
+        let mut rx = self.exit_tx.subscribe();
+        if *rx.borrow() {
+            return;
+        }
+        let _ = rx.changed().await;
     }
 }
 
