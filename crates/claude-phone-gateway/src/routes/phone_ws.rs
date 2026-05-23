@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -13,7 +14,9 @@ use claude_phone_shared::protocol::{
 };
 use claude_phone_shared::SessionToken;
 
-use crate::rate_limit::{ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC, SINK_SEND_TIMEOUT};
+use crate::rate_limit::{
+    ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC, PONG_DEADLINE, SINK_SEND_TIMEOUT,
+};
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -124,6 +127,14 @@ async fn handle_socket(
     let to_wrapper = handle.session.to_wrapper.clone();
     let cancel = handle.session.cancel.clone();
 
+    // TM-RATE.7 — shared "millis since this socket opened" reference for the
+    // no-pong watchdog. See wrapper_ws for the full explanation; the same
+    // shape is needed here so a phone with a dead reverse-channel doesn't
+    // hold an FD indefinitely.
+    let socket_start = Instant::now();
+    let last_pong_ms = Arc::new(AtomicU64::new(0));
+    let last_pong_outgoing = last_pong_ms.clone();
+
     let cancel_outgoing = cancel.clone();
     let cancel_for_flood = cancel.clone();
     let outgoing_task = tokio::spawn(async move {
@@ -145,6 +156,14 @@ async fn handle_socket(
                         Message::Binary(b) => Frame::Binary(b),
                         Message::Text(t) => Frame::Text(t),
                         Message::Close(_) => break,
+                        // TM-RATE.7: stamp last_pong on every received Pong.
+                        Message::Pong(_) => {
+                            last_pong_outgoing.store(
+                                socket_start.elapsed().as_millis() as u64,
+                                Ordering::Relaxed,
+                            );
+                            continue;
+                        }
                         _ => continue,
                     };
                     if !conn_rate.check(Instant::now()) {
@@ -163,10 +182,12 @@ async fn handle_socket(
     });
 
     let cancel_incoming = cancel.clone();
+    let last_pong_incoming = last_pong_ms.clone();
     let incoming_task = tokio::spawn(async move {
         // 30s server-initiated Ping keeps the phone's WebSocket alive across
-        // NAT and Cloudflare's idle-connection drop (~100s). Pong replies
-        // arrive through the same socket; axum dispatches them silently.
+        // NAT and Cloudflare's idle-connection drop (~100s). The reply Pong
+        // (handled in outgoing_task) stamps `last_pong_incoming`; this task
+        // checks the age on every tick (TM-RATE.7).
         let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(30));
         keepalive.tick().await; // skip immediate tick
 
@@ -205,6 +226,21 @@ async fn handle_socket(
                     }
                 }
                 _ = keepalive.tick() => {
+                    // TM-RATE.7: check elapsed since last Pong BEFORE sending
+                    // the next Ping. See wrapper_ws for the full reasoning.
+                    let now_ms = socket_start.elapsed().as_millis() as u64;
+                    let last_ms = last_pong_incoming.load(Ordering::Relaxed);
+                    let age_ms = now_ms.saturating_sub(last_ms);
+                    if age_ms > PONG_DEADLINE.as_millis() as u64 {
+                        tracing::warn!(
+                            peer = %peer,
+                            age_ms,
+                            deadline_ms = PONG_DEADLINE.as_millis() as u64,
+                            "TM-RATE.7: phone no-pong deadline exceeded, closing"
+                        );
+                        cancel_incoming.cancel();
+                        break;
+                    }
                     // TM-RATE.6: bounded keepalive write — see wrapper_ws.
                     match tokio::time::timeout(
                         SINK_SEND_TIMEOUT,

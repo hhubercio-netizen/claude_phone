@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -12,7 +13,7 @@ use claude_phone_shared::protocol::{ControlMessage, ErrorCode, ErrorMessage, Ser
 
 use crate::auth::verify_api_key;
 use crate::rate_limit::{
-    AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC, SINK_SEND_TIMEOUT,
+    AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC, PONG_DEADLINE, SINK_SEND_TIMEOUT,
 };
 use crate::session::{Frame, SessionRegistry};
 
@@ -139,9 +140,17 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
     let mut rx_from_phone = handle.rx;
     let session = handle.session.clone();
 
+    // TM-RATE.7 — shared "millis since this socket opened" reference for the
+    // no-pong watchdog. Both tasks see the same `start`; `last_pong_ms`
+    // stamps a Relaxed write on every incoming Pong and a Relaxed read on
+    // every keepalive tick. AtomicU64 keeps the watchdog lock-free.
+    let socket_start = Instant::now();
+    let last_pong_ms = Arc::new(AtomicU64::new(0));
+
     let session_outgoing = session.clone();
     let cancel_outgoing = session.cancel.clone();
     let session_for_flood = session.clone();
+    let last_pong_outgoing = last_pong_ms.clone();
     let outgoing_task = tokio::spawn(async move {
         // TM-RATE.3 — per-connection sliding-window cap. Wrapper→phone is the
         // PTY direction so bursts during `claude` output are expected. Cap at
@@ -161,6 +170,16 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
                         Message::Binary(b) => Frame::Binary(b),
                         Message::Text(t) => Frame::Text(t),
                         Message::Close(_) => break,
+                        // TM-RATE.7: stamp last_pong on every received Pong.
+                        // The keepalive in incoming_task reads this to decide
+                        // whether the peer is still reachable.
+                        Message::Pong(_) => {
+                            last_pong_outgoing.store(
+                                socket_start.elapsed().as_millis() as u64,
+                                Ordering::Relaxed,
+                            );
+                            continue;
+                        }
                         _ => continue,
                     };
                     if !conn_rate.check(Instant::now()) {
@@ -198,10 +217,12 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
     });
 
     let cancel_incoming = session.cancel.clone();
+    let last_pong_incoming = last_pong_ms.clone();
     let incoming_task = tokio::spawn(async move {
         // Periodically send a Ping so NAT/Cloudflare proxies don't tear the
-        // idle WebSocket down between bursts of PTY output. Wrapper-side WS
-        // also handles incoming Pong silently via the `_` branch.
+        // idle WebSocket down between bursts of PTY output. The reply Pong
+        // (handled in outgoing_task) stamps `last_pong_incoming`; this
+        // task checks the age on every tick (TM-RATE.7).
         let mut keepalive = tokio::time::interval(std::time::Duration::from_secs(30));
         keepalive.tick().await; // skip immediate tick
 
@@ -239,6 +260,22 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
                     }
                 }
                 _ = keepalive.tick() => {
+                    // TM-RATE.7: check elapsed since last Pong BEFORE sending
+                    // the next Ping. If the peer hasn't pong'd within
+                    // PONG_DEADLINE the socket is silently dead; cancel and
+                    // reclaim resources.
+                    let now_ms = socket_start.elapsed().as_millis() as u64;
+                    let last_ms = last_pong_incoming.load(Ordering::Relaxed);
+                    let age_ms = now_ms.saturating_sub(last_ms);
+                    if age_ms > PONG_DEADLINE.as_millis() as u64 {
+                        tracing::warn!(
+                            age_ms,
+                            deadline_ms = PONG_DEADLINE.as_millis() as u64,
+                            "TM-RATE.7: wrapper no-pong deadline exceeded, closing"
+                        );
+                        cancel_incoming.cancel();
+                        break;
+                    }
                     // TM-RATE.6: same bound on the keepalive write — a peer
                     // that won't accept a 0-byte ping isn't accepting anything.
                     match tokio::time::timeout(

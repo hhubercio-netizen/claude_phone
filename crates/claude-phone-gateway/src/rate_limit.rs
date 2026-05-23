@@ -144,6 +144,25 @@ pub const GW_TO_PHONE_MSG_PER_SEC: usize = 1000;
 // reader is shut down well before its connection becomes a DoS lever.
 pub const SINK_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
+// --- TM-RATE.7 -------------------------------------------------------------
+
+// TM-RATE.7 — post-hello idle / no-pong watchdog.
+//
+// The keepalive ping (30 s interval) only detects breakage in the WRITE
+// direction. A peer that has half-closed its read side, or whose NAT
+// state has been silently dropped, will keep absorbing our pings without
+// ever responding. Without a pong-deadline we hold that connection's
+// task and FDs indefinitely.
+//
+// On every received Pong we stamp `last_pong`. On every keepalive tick
+// we check elapsed-since-last-pong; if it exceeds `PONG_DEADLINE` the
+// connection is declared dead and the session is cancelled.
+//
+// 90 s is three keepalive intervals: a single dropped ping or pong is
+// tolerated (mobile networks lose packets) but a sustained silence past
+// three rounds is conclusive evidence the peer is gone.
+pub const PONG_DEADLINE: Duration = Duration::from_secs(90);
+
 #[derive(Debug)]
 pub struct ConnRateLimiter {
     window: VecDeque<Instant>,

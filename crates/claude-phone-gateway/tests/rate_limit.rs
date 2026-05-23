@@ -14,7 +14,7 @@ use claude_phone_gateway::{
     http::build_app,
     rate_limit::{
         AUTH_FAIL_THRESHOLD, GW_TO_PHONE_MSG_PER_SEC, PER_IP_BURST, PER_IP_REQ_PER_SEC,
-        SINK_SEND_TIMEOUT,
+        PONG_DEADLINE, SINK_SEND_TIMEOUT,
     },
     serve,
 };
@@ -324,5 +324,29 @@ fn sink_send_timeout_is_bounded_and_reasonable() {
     assert!(
         SINK_SEND_TIMEOUT <= Duration::from_secs(30),
         "TM-RATE.6: SINK_SEND_TIMEOUT > 30 s effectively disables slow-write defense"
+    );
+}
+
+/// RL-I6 — TM-RATE.7 PONG_DEADLINE must be a bounded, non-degenerate value
+/// AND must be a strict multiple of the 30 s keepalive interval so the
+/// watchdog can absorb at least one dropped pong before firing.
+///
+/// Lower bound (>= 60 s): allow at least one missed pong-round before the
+/// session is killed; mobile networks lose individual packets routinely.
+/// Upper bound (<= 5 min): a peer silent for 5 minutes is not coming back;
+/// holding the FD any longer is pure DoS amplification.
+///
+/// Combined with the compile-time `PONG_DEADLINE` imports in both routes
+/// (clippy `-D warnings` blocks unused-import drift), removing the
+/// watchdog wiring or silently bloating the deadline both break CI.
+#[test]
+fn pong_deadline_is_bounded_and_reasonable() {
+    assert!(
+        PONG_DEADLINE >= Duration::from_secs(60),
+        "TM-RATE.7: PONG_DEADLINE < 60 s kills sessions on a single lost pong round"
+    );
+    assert!(
+        PONG_DEADLINE <= Duration::from_secs(300),
+        "TM-RATE.7: PONG_DEADLINE > 5 min defeats the no-pong watchdog"
     );
 }
