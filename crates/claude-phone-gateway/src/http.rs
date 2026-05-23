@@ -13,7 +13,7 @@ use tower_http::trace::TraceLayer;
 use claude_phone_shared::ApiKey;
 
 use crate::config::GatewayConfig;
-use crate::rate_limit::{PER_IP_BURST, PER_IP_REQ_PER_SEC};
+use crate::rate_limit::{AuthRateLimiter, PER_IP_BURST, PER_IP_REQ_PER_SEC};
 use crate::routes::{health, phone_ws, statics, wrapper_ws};
 use crate::session::SessionRegistry;
 
@@ -59,10 +59,16 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
         });
     }
 
+    // TM-RATE.2 — single process-wide AuthRateLimiter so failures from the
+    // same IP add up across concurrent wrapper attempts. Wrapped in Clone
+    // (cheap Arc clone) and stashed on the per-handler state.
+    let auth_rate_limiter = AuthRateLimiter::new();
+
     let wrapper_state = wrapper_ws::WrapperWsState {
         registry: registry.clone(),
         allowed_keys,
         public_origin: config.public_origin.clone(),
+        auth_rate_limiter,
     };
 
     let phone_state = phone_ws::PhoneWsState {

@@ -1,7 +1,8 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{ConnectInfo, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
@@ -9,6 +10,7 @@ use futures::{SinkExt, StreamExt};
 use claude_phone_shared::protocol::{ControlMessage, ErrorCode, ErrorMessage, ServerHello};
 
 use crate::auth::verify_api_key;
+use crate::rate_limit::AuthRateLimiter;
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -20,6 +22,10 @@ pub struct WrapperWsState {
     /// depth against CSWSH where a malicious page running in a victim's
     /// browser tries to mount a wrapper session.
     pub public_origin: Option<String>,
+    /// TM-RATE.2 — per-IP auth-failure tracker. Shared across all wrapper
+    /// upgrades so failures accumulate against a single IP regardless of
+    /// concurrent attempts.
+    pub auth_rate_limiter: AuthRateLimiter,
 }
 
 /// See phone_ws::MAX_WS_MESSAGE_BYTES — wrapper carries PTY chunks (8KB) and
@@ -35,8 +41,16 @@ const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 pub async fn handler(
     ws: WebSocketUpgrade,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<WrapperWsState>,
 ) -> Response {
+    // TM-RATE.2 — short-circuit upgrade for IPs that have tripped the
+    // auth-failure lockout. 429 communicates "try again later" without
+    // revealing whether the API key would otherwise have been valid.
+    if state.auth_rate_limiter.is_locked(peer.ip()) {
+        return StatusCode::TOO_MANY_REQUESTS.into_response();
+    }
+
     if let Some(expected) = state.public_origin.as_deref() {
         if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
             if origin != expected {
@@ -47,10 +61,10 @@ pub async fn handler(
 
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .on_upgrade(move |socket| handle_socket(socket, state, peer))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
+async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: SocketAddr) {
     let hello = match recv_hello(&mut socket).await {
         Some(h) => h,
         None => return,
@@ -70,6 +84,12 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
     };
 
     if !verify_api_key(&api_key, &state.allowed_keys) {
+        // TM-RATE.2 — record the failure BEFORE responding so a brute-forcer
+        // hitting in rapid succession ratchets the counter on every miss.
+        // The 4.2 sub-spec also emits a structured auth-failure log; the
+        // counter side-effect lives here, the log line is upstream — no
+        // duplication.
+        state.auth_rate_limiter.record_failure(peer.ip());
         send_error(
             &mut socket,
             ErrorCode::InvalidApiKey,
@@ -78,6 +98,10 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState) {
         .await;
         return;
     }
+    // TM-RATE.2 — clear escalation count once we've confirmed the operator
+    // owns a valid key. Otherwise an honest user who fat-fingered earlier
+    // could find themselves locked out hours later.
+    state.auth_rate_limiter.record_success(peer.ip());
 
     let handle = match state.registry.register_wrapper(token.clone()).await {
         Ok(h) => h,

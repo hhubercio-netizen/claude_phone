@@ -1,21 +1,27 @@
-//! Forward-looking integration tests for TM-RATE.1 (per-IP HTTP cap) and
-//! TM-RATE.9 (slow-loris header_read_timeout).
+//! Forward-looking integration tests for TM-RATE.1 (per-IP HTTP cap),
+//! TM-RATE.2 (auth-failure lockout), and TM-RATE.9 (slow-loris
+//! header_read_timeout).
 //!
-//! Both tests drive the exact `serve::run_with` path the binary uses, not
-//! axum::serve, so a future refactor that drops the GovernorLayer or the
-//! header_read_timeout will fail CI here.
+//! All tests drive the exact `serve::run_with` path the binary uses, not
+//! axum::serve, so a future refactor that drops the GovernorLayer, the
+//! AuthRateLimiter, or the header_read_timeout will fail CI here.
 
 use std::time::Duration;
 
 use claude_phone_gateway::{
     config::{GatewayConfig, LogFormat},
     http::build_app,
-    rate_limit::{PER_IP_BURST, PER_IP_REQ_PER_SEC},
+    rate_limit::{AUTH_FAIL_THRESHOLD, PER_IP_BURST, PER_IP_REQ_PER_SEC},
     serve,
 };
-use claude_phone_shared::ApiKey;
+use claude_phone_shared::{
+    protocol::{ControlMessage, WrapperHello},
+    ApiKey, SessionToken,
+};
+use futures::SinkExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio_tungstenite::tungstenite::Message;
 
 /// Spawn a gateway on a free port using the production serve loop.
 ///
@@ -24,6 +30,14 @@ use tokio::net::TcpStream;
 /// that don't care about slow-loris, or shrink it to a test budget for
 /// the slow-loris test itself. Returns the port the listener is bound to.
 async fn spawn_gateway(header_read_timeout: Duration) -> u16 {
+    spawn_gateway_with_key(header_read_timeout, ApiKey::generate())
+        .await
+        .0
+}
+
+/// Like `spawn_gateway` but returns the configured `ApiKey` so tests that
+/// need to drive a known-good vs known-bad auth flow can reuse the helper.
+async fn spawn_gateway_with_key(header_read_timeout: Duration, api_key: ApiKey) -> (u16, ApiKey) {
     let static_dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(static_dir.path().join("index.html"), "<html></html>")
         .expect("write index.html");
@@ -33,7 +47,7 @@ async fn spawn_gateway(header_read_timeout: Duration) -> u16 {
     let config = GatewayConfig {
         bind_addr: format!("127.0.0.1:{port}").parse().expect("addr"),
         static_dir: static_dir.path().to_owned(),
-        api_keys: vec![ApiKey::generate()],
+        api_keys: vec![api_key.clone()],
         session_idle_timeout_secs: 60,
         max_sessions: 10,
         log_format: LogFormat::Pretty,
@@ -62,7 +76,7 @@ async fn spawn_gateway(header_read_timeout: Duration) -> u16 {
 
     // small settle window so the listener has accepted before clients hit
     tokio::time::sleep(Duration::from_millis(50)).await;
-    port
+    (port, api_key)
 }
 
 /// RL-I1 — TM-RATE.1. A single client (one source IP) firing well above
@@ -148,5 +162,72 @@ async fn slow_loris_header_read_timeout() {
         result.is_ok(),
         "slow-loris connection was not closed within {cap:?}; \
          header_read_timeout regression suspected"
+    );
+}
+
+/// TM-RATE.2 — `AUTH_FAIL_THRESHOLD` failed WrapperHello attempts from one
+/// source IP MUST trigger a per-IP lockout, after which a subsequent
+/// upgrade attempt — even with a valid api key — is rejected with HTTP
+/// 429 before the WebSocket handshake completes.
+///
+/// The 250 ms pacing between attempts is deliberate: TM-RATE.1's per-IP
+/// HTTP cap admits ~5 r/s (1 token / 200 ms in the governor leaky
+/// bucket). Without that pacing we would race the HTTP cap and a 429
+/// here could ambiguously be either guard firing — the test must prove
+/// it is specifically TM-RATE.2 after `AUTH_FAIL_THRESHOLD` failures.
+#[tokio::test]
+async fn wrapper_auth_failures_trigger_per_ip_lockout() {
+    let api_key = ApiKey::generate();
+    let (port, valid_key) = spawn_gateway_with_key(serve::HEADER_READ_TIMEOUT, api_key).await;
+    let wrong_key = ApiKey::generate();
+    assert_ne!(
+        wrong_key.as_str(),
+        valid_key.as_str(),
+        "test invariant: wrong_key must differ from valid_key"
+    );
+
+    let url = format!("ws://127.0.0.1:{port}/api/wrapper");
+
+    for i in 0..AUTH_FAIL_THRESHOLD {
+        let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+            .await
+            .unwrap_or_else(|e| panic!("attempt {i}: upgrade should succeed: {e:?}"));
+        let hello = ControlMessage::WrapperHello(WrapperHello {
+            api_key: wrong_key.clone(),
+            token: SessionToken::generate(),
+            cols: 80,
+            rows: 24,
+        });
+        ws.send(Message::Text(
+            serde_json::to_string(&hello).expect("hello json"),
+        ))
+        .await
+        .ok();
+        // drain whatever the server sends in response (typically an
+        // Error frame followed by Close) so the socket is cleanly done
+        // before the next iteration.
+        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+            use futures::StreamExt;
+            while ws.next().await.is_some() {}
+        })
+        .await;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+
+    // The next attempt — using the GOOD key — must still be locked out.
+    // If TM-RATE.2 is wired correctly this returns 429 at the HTTP layer
+    // before the WS handshake completes; tokio_tungstenite surfaces that
+    // as `Error::Http`.
+    let err = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect_err("post-threshold attempt must be rejected");
+    let status = match err {
+        tokio_tungstenite::tungstenite::Error::Http(resp) => resp.status(),
+        other => panic!("expected Http error, got: {other:?}"),
+    };
+    assert_eq!(
+        status.as_u16(),
+        429,
+        "lockout must return 429 (TM-RATE.2), got {status:?}"
     );
 }
