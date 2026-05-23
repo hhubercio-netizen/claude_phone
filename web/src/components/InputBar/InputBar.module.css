@@ -1,0 +1,50 @@
+.bar {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--cl-panel-bg);
+  border-top: 1px solid var(--cl-panel-border);
+  align-items: center;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  background: var(--cl-input-bg);
+  color: var(--cl-fg);
+  border: 1px solid var(--cl-panel-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  /* sans-serif system stack so every Unicode char the user might type is
+     guaranteed to render — the page-level monospace stack drops glyphs on
+     some mobile builds. */
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 16px; /* 16px on iOS prevents zoom-on-focus */
+  -webkit-tap-highlight-color: transparent;
+  outline: 0;
+}
+
+.input::placeholder {
+  color: var(--cl-muted);
+  opacity: 0.7;
+}
+
+.send {
+  flex: 0 0 auto;
+  min-width: 64px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: 0;
+  background: var(--cl-accent);
+  color: var(--cl-bg);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

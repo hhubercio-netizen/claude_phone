@@ -53,19 +53,19 @@ export function Terminal({
     if (typeof fontSize === 'number') term.setFontSize(fontSize);
   }, [fontSize, term]);
 
+  // No onClick={term.focus()} here on purpose. The terminal is display-only
+  // on mobile — typing happens in the dedicated InputBar below, so touching
+  // the terminal area must remain a pure scroll surface. Focusing xterm
+  // here would re-introduce the iOS scroll-into-view-for-helper-textarea
+  // bug that drags the entire UI off-screen.
   return (
-    <div className={styles.wrapper} onClick={() => term.focus()}>
+    <div className={styles.wrapper}>
       <div ref={term.containerRef} className={styles.container} />
       {!atBottom && (
         <button
           type="button"
           className={styles.scrollBottom}
-          onClick={(e) => {
-            // Stop the click from also re-focusing the terminal — pressing
-            // the pill is purely a viewport command, not an input event.
-            e.stopPropagation();
-            term.scrollToBottom();
-          }}
+          onClick={() => term.scrollToBottom()}
           aria-label="Scroll to bottom"
         >
           ↓ live

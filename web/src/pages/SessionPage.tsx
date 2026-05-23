@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { ActionBar } from '../components/ActionBar/ActionBar';
+import { InputBar } from '../components/InputBar/InputBar';
 import { MobileLayout } from '../components/Layout/MobileLayout';
 import { PasteModal } from '../components/PasteModal/PasteModal';
 import { Terminal } from '../components/Terminal/Terminal';
@@ -123,7 +124,12 @@ export function SessionPage() {
             fontSize={font.size}
           />
         }
-        footer={<ActionBar onKey={handleInput} />}
+        footer={
+          <>
+            <ActionBar onKey={handleInput} />
+            <InputBar onBytes={handleInput} disabled={state !== 'open'} />
+          </>
+        }
       />
       <PasteModal
         open={pasteOpen}

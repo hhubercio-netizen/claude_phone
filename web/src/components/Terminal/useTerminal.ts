@@ -1,6 +1,13 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+// xterm ships with a stylesheet that, among other things, moves the
+// helper-textarea off-screen (left: -9999em). Without this import the
+// textarea sits at the top-left of the terminal container with default
+// browser styling — visible on mobile as a stray "(" / ")" / "*" glyph
+// depending on what the OS keyboard/autocorrect renders, and catching any
+// focus tap and dragging the viewport offscreen.
+import '@xterm/xterm/css/xterm.css';
 import { claudeTheme } from './theme';
 
 export interface UseTerminalParams {

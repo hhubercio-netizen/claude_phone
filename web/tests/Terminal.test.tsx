@@ -140,12 +140,15 @@ describe('Terminal', () => {
     expect(FakeXTerm.lastInstance!.written[0]).toEqual(new Uint8Array([1, 2, 3]));
   });
 
-  it('focuses xterm when the container is clicked', () => {
+  it('does NOT focus xterm when the container is clicked', () => {
+    // The terminal is display-only on mobile — typing is done via the
+    // dedicated InputBar. Focusing xterm here would re-introduce the iOS
+    // helper-textarea scroll-into-view bug that drags the UI off-screen.
     const { container } = render(
       <Terminal onInputBytes={() => {}} onResize={() => {}} />,
     );
     fireEvent.click(container.firstChild as Element);
-    expect(FakeXTerm.lastInstance!.focused).toBe(true);
+    expect(FakeXTerm.lastInstance!.focused).toBe(false);
   });
 
   it('disposes xterm and disconnects ResizeObserver on unmount', () => {
