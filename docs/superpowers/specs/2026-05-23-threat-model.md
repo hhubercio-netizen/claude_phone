@@ -138,7 +138,7 @@ profiles; some mitigations cover multiple actors.
 - **Motivation**: someone with a *legitimate* api_key (former user, disgruntled friend, ex-colleague) abuses the system.
 - **Capabilities**: full protocol knowledge; valid api_key; multiple devices for concurrent sessions; can craft OSC/DCS in PTY input.
 - **TTPs**: replay own token across devices; attempt to register a token belonging to another user; exfil via OSC 52 clipboard write; hyperlink injection via OSC 8; memory exhaustion via fast I/O.
-- **Mitigations focused on**: `TM-AUTH.3` (single-phone), `TM-AUTH.4` (revocation), `TM-INPUT.1-3` (PTY filtering), `TM-RATE.4` (memory cap), `TM-AUTH.7` (auth-event audit log).
+- **Mitigations focused on**: `TM-AUTH.3` (single-phone), `TM-AUTH.4` (revocation), `TM-INPUT.1-3` (PTY filtering), `TM-RATE.4` (memory cap, 64 KiB), `TM-AUTH.7` (auth-event audit log).
 
 ---
 
@@ -170,7 +170,7 @@ Each cell answers: which STRIDE category applies, at what severity, and which
 | I      | Token in URL leaks via Referer or tracing log                                   | High     | `TM-TLS.5` Referrer-Policy no-referrer (**GREEN**), `TM-SECRET.6` redact_path in TraceLayer (**GREEN**) |
 | I      | 500 response includes stack trace                                               | Medium   | `TM-SECRET.11` opaque error chain in `error.rs`                                                     |
 | D      | DoS via WS connection flood, slow-loris, slow-write, frame-size abuse           | High     | `TM-WS.4/5` size caps (**GREEN**), `TM-RATE.8` slow-loris recv_hello (**GREEN** wrapper-side), `TM-RATE.1` per-IP cap |
-| D      | Memory exhaustion via replay buffer growth                                      | High     | `TM-RATE.4` 8 MB hard cap (drop oldest on overflow)                                                  |
+| D      | Memory exhaustion via replay buffer growth                                      | High     | `TM-RATE.4` 64 KiB per-session cap (drop oldest on overflow, `session.rs:24`)                        |
 | D      | FD exhaustion                                                                   | Medium   | `TM-INFRA.6` systemd LimitNOFILE, kernel ulimit                                                     |
 | E      | Token registration race (TOCTOU)                                                | Medium   | `TM-CODE.4` session/registry lock-ordering audit                                                    |
 
@@ -640,7 +640,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-RATE.1  | tower-governor per-IP cap, 5 concurrent WS                                                  | TODO   |
 | TM-RATE.2  | Auth-attempt rate limit, 10/IP/min, exp backoff after 5                                     | TODO   |
 | TM-RATE.3  | Per-connection msg/s rate (100 phone→gw, 1000 gw→phone)                                     | TODO   |
-| TM-RATE.4  | Per-session memory hard cap 8 MB; drop oldest on overflow                                   | TODO   |
+| TM-RATE.4  | Per-session memory cap `PHONE_BUFFER_BYTES_CAP = 64 KiB`, drop oldest on overflow (session.rs:24) | GREEN  |
 | TM-RATE.5  | FD exhaustion: systemd LimitNOFILE + warning alert at 80%                                   | TODO   |
 | TM-RATE.6  | Slow-write defense: bounded channel + timeout on sink send                                  | TODO   |
 | TM-RATE.7  | Post-hello idle timeout (ping/pong + 60 s no-pong → drop)                                   | TODO   |
