@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -13,6 +14,11 @@ use crate::error::GatewayError;
 pub struct SessionRegistry {
     inner: Arc<DashMap<String, Arc<Session>>>,
     max_sessions: usize,
+    // TM-CODE.4: atomic reservation counter prevents shard-race over-allocation
+    // against `max_sessions`. DashMap holds per-shard locks; without a global
+    // counter, two concurrent register_wrapper calls whose tokens hash to
+    // different shards could both pass a `len()` check and both insert.
+    active_count: AtomicUsize,
 }
 
 pub struct WrapperHandle {
@@ -32,30 +38,38 @@ impl SessionRegistry {
         Self {
             inner: Arc::new(DashMap::new()),
             max_sessions,
+            active_count: AtomicUsize::new(0),
         }
     }
 
     pub async fn register_wrapper(&self, token: SessionToken) -> RegisterResult {
-        let key = token.as_str().to_string();
-
-        // Soft pre-check against max_sessions. The atomic check happens inside
-        // the Entry below (where len() is read again with the shard lock held)
-        // to keep the bound under concurrent registrations.
-        if self.inner.len() >= self.max_sessions {
+        // TM-CODE.4: atomic reservation BEFORE allocating per-session state.
+        // Reserve the slot first; only proceed if we are within the cap.
+        let prev = self.active_count.fetch_add(1, Ordering::SeqCst);
+        if prev >= self.max_sessions {
+            self.active_count.fetch_sub(1, Ordering::SeqCst);
             return Err(GatewayError::Internal(anyhow::anyhow!(
                 "max sessions reached"
             )));
+        }
+
+        let key = token.as_str().to_string();
+        if key.len() > 64 {
+            // TM-CODE.4: give the reservation back since we are rejecting.
+            self.active_count.fetch_sub(1, Ordering::SeqCst);
+            return Err(GatewayError::InvalidToken);
         }
 
         let (tx_to_wrapper, rx_from_phone) = mpsc::channel::<Frame>(256);
         let session = Arc::new(Session::new(token, tx_to_wrapper));
 
         match self.inner.entry(key) {
-            Entry::Occupied(_) => Err(GatewayError::SessionTaken),
+            Entry::Occupied(_) => {
+                // TM-CODE.4: slot is taken — return reservation.
+                self.active_count.fetch_sub(1, Ordering::SeqCst);
+                Err(GatewayError::SessionTaken)
+            }
             Entry::Vacant(v) => {
-                if v.key().len() > 64 {
-                    return Err(GatewayError::InvalidToken);
-                }
                 v.insert(session.clone());
                 Ok(WrapperHandle {
                     session,
@@ -108,6 +122,9 @@ impl SessionRegistry {
     /// tasks bound to it tear down. Idempotent.
     pub async fn drop_session(&self, token: &SessionToken) {
         if let Some((_, session)) = self.inner.remove(token.as_str()) {
+            // TM-CODE.4: keep active_count in sync with inner. Only decrement
+            // on actual removal so double-calls remain idempotent.
+            self.active_count.fetch_sub(1, Ordering::SeqCst);
             session.cancel.cancel();
             tracing::info!(session_id = %session.id, "session dropped by sweeper");
         }
@@ -139,7 +156,10 @@ impl SessionRegistry {
     }
 
     pub fn remove(&self, token: &SessionToken) {
-        self.inner.remove(token.as_str());
+        if self.inner.remove(token.as_str()).is_some() {
+            // TM-CODE.4: decrement on actual removal only.
+            self.active_count.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 
     pub fn len(&self) -> usize {
