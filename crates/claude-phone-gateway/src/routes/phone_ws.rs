@@ -1,7 +1,9 @@
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
@@ -11,6 +13,7 @@ use claude_phone_shared::protocol::{
 };
 use claude_phone_shared::SessionToken;
 
+use crate::rate_limit::{ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC};
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -30,6 +33,7 @@ pub async fn handler(
     ws: WebSocketUpgrade,
     Path(token_str): Path<String>,
     headers: HeaderMap,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<PhoneWsState>,
 ) -> Response {
     // Strict equality on token length — anything else is malformed and we
@@ -52,10 +56,15 @@ pub async fn handler(
 
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, token_str))
+        .on_upgrade(move |socket| handle_socket(socket, state, token_str, peer))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: String) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: PhoneWsState,
+    token_str: String,
+    peer: SocketAddr,
+) {
     let token = match SessionToken::parse(&token_str) {
         Ok(t) => t,
         Err(_) => {
@@ -116,7 +125,14 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
     let cancel = handle.session.cancel.clone();
 
     let cancel_outgoing = cancel.clone();
+    let cancel_for_flood = cancel.clone();
     let outgoing_task = tokio::spawn(async move {
+        // TM-RATE.3 — per-connection sliding-window cap on phone→wrapper
+        // traffic. Direction is keystrokes/touches, so PHONE_TO_GW_MSG_PER_SEC
+        // (100/s) is generous for a human while still ruling out automated
+        // floods. Exceeding the cap cancels the whole session, not just this
+        // task — a flooding phone has no business holding the session open.
+        let mut conn_rate = ConnRateLimiter::new(PHONE_TO_GW_MSG_PER_SEC);
         loop {
             let cancelled = cancel_outgoing.cancelled();
             tokio::pin!(cancelled);
@@ -131,6 +147,15 @@ async fn handle_socket(mut socket: WebSocket, state: PhoneWsState, token_str: St
                         Message::Close(_) => break,
                         _ => continue,
                     };
+                    if !conn_rate.check(Instant::now()) {
+                        tracing::warn!(
+                            peer = %peer,
+                            cap = PHONE_TO_GW_MSG_PER_SEC,
+                            "TM-RATE.3: phone exceeded per-connection msg rate, closing"
+                        );
+                        cancel_for_flood.cancel();
+                        break;
+                    }
                     if to_wrapper.send(frame).await.is_err() { break; }
                 }
             }

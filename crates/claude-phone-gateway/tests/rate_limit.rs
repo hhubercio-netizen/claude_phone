@@ -1,24 +1,25 @@
 //! Forward-looking integration tests for TM-RATE.1 (per-IP HTTP cap),
-//! TM-RATE.2 (auth-failure lockout), and TM-RATE.9 (slow-loris
-//! header_read_timeout).
+//! TM-RATE.2 (auth-failure lockout), TM-RATE.3 (per-connection sliding-
+//! window message limiter), and TM-RATE.9 (slow-loris header_read_timeout).
 //!
 //! All tests drive the exact `serve::run_with` path the binary uses, not
 //! axum::serve, so a future refactor that drops the GovernorLayer, the
-//! AuthRateLimiter, or the header_read_timeout will fail CI here.
+//! AuthRateLimiter, the ConnRateLimiter wiring, or the header_read_timeout
+//! will fail CI here.
 
 use std::time::Duration;
 
 use claude_phone_gateway::{
     config::{GatewayConfig, LogFormat},
     http::build_app,
-    rate_limit::{AUTH_FAIL_THRESHOLD, PER_IP_BURST, PER_IP_REQ_PER_SEC},
+    rate_limit::{AUTH_FAIL_THRESHOLD, GW_TO_PHONE_MSG_PER_SEC, PER_IP_BURST, PER_IP_REQ_PER_SEC},
     serve,
 };
 use claude_phone_shared::{
     protocol::{ControlMessage, WrapperHello},
     ApiKey, SessionToken,
 };
-use futures::SinkExt;
+use futures::{SinkExt, StreamExt};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
@@ -229,5 +230,76 @@ async fn wrapper_auth_failures_trigger_per_ip_lockout() {
         status.as_u16(),
         429,
         "lockout must return 429 (TM-RATE.2), got {status:?}"
+    );
+}
+
+/// RL-I3 — TM-RATE.3. A wrapper that floods more than
+/// `GW_TO_PHONE_MSG_PER_SEC` binary frames inside a single second MUST have
+/// its session torn down. The per-connection sliding-window limiter lives
+/// inside `wrapper_ws::outgoing_task`; if it gets deleted or down-graded,
+/// this test fails because the server stops closing the socket under flood.
+///
+/// We send `cap + 50` frames as fast as `send()` will accept them. The
+/// server's outgoing_task processes them on its own pace; the test passes
+/// as long as the server closes the socket within a generous wall-clock
+/// cap. A future regression that silently drops the limiter would keep
+/// the socket open forever, blowing the timeout.
+#[tokio::test]
+async fn wrapper_message_flood_closes_session() {
+    let api_key = ApiKey::generate();
+    let (port, valid_key) = spawn_gateway_with_key(serve::HEADER_READ_TIMEOUT, api_key).await;
+    let url = format!("ws://127.0.0.1:{port}/api/wrapper");
+
+    let (mut ws, _resp) = tokio_tungstenite::connect_async(&url)
+        .await
+        .expect("upgrade should succeed");
+    let hello = ControlMessage::WrapperHello(WrapperHello {
+        api_key: valid_key.clone(),
+        token: SessionToken::generate(),
+        cols: 80,
+        rows: 24,
+    });
+    ws.send(Message::Text(
+        serde_json::to_string(&hello).expect("hello json"),
+    ))
+    .await
+    .expect("send hello");
+
+    // Drain ServerHello so the next read sits on user-data frames only.
+    let _server_hello = tokio::time::timeout(Duration::from_millis(500), ws.next())
+        .await
+        .expect("server_hello within 500ms")
+        .expect("server_hello frame present")
+        .expect("server_hello not an error");
+
+    // Flood. `cap + 50` is well over the per-connection cap; the smallest
+    // payload that's still a valid binary frame keeps the test cheap.
+    let burst = GW_TO_PHONE_MSG_PER_SEC + 50;
+    for _ in 0..burst {
+        // Best-effort: if the peer closes mid-burst, send() errors and we
+        // bail — that's actually the success path.
+        if ws.send(Message::Binary(vec![0u8; 1])).await.is_err() {
+            break;
+        }
+    }
+
+    // The server MUST close the socket within a generous wall-clock cap.
+    // 2 seconds is plenty given the rate cap is 1s sliding window.
+    let close_result = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match ws.next().await {
+                None => return,                        // stream ended = close
+                Some(Err(_)) => return,                // peer closed = close
+                Some(Ok(Message::Close(_))) => return, // explicit close frame
+                Some(Ok(_)) => continue,               // drain any echoed/queued frame
+            }
+        }
+    })
+    .await;
+
+    assert!(
+        close_result.is_ok(),
+        "wrapper flood should have closed the session within 2s; \
+         TM-RATE.3 ConnRateLimiter regression suspected"
     );
 }

@@ -639,7 +639,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 |------------|---------------------------------------------------------------------------------------------|--------|
 | TM-RATE.1  | tower-governor per-IP HTTP cap (5 req/s, burst 10) wired in `http.rs` GovernorLayer + `serve.rs` ConnectInfo injection; covered by `tests/rate_limit.rs::per_ip_governor_returns_429_under_burst` | GREEN  |
 | TM-RATE.2  | Auth-attempt rate limit (10 failures/IP/60s → exp backoff `2^n` s, cap 1 h) via `AuthRateLimiter` in `rate_limit.rs`; wired in `wrapper_ws::handler` (locked IPs get 429 before upgrade) and `handle_socket` (failure / success counters); covered by `tests/rate_limit.rs::wrapper_auth_failures_trigger_per_ip_lockout` + unit tests in `rate_limit::tests` | GREEN  |
-| TM-RATE.3  | Per-connection msg/s rate (100 phone→gw, 1000 gw→phone)                                     | TODO   |
+| TM-RATE.3  | Per-connection msg/s rate via `ConnRateLimiter` (100/s phone→gw using `PHONE_TO_GW_MSG_PER_SEC`, 1000/s wrapper→phone using `GW_TO_PHONE_MSG_PER_SEC`); wired in both `wrapper_ws::outgoing_task` and `phone_ws::outgoing_task`. Flooding cancels the session via `session.cancel.cancel()`. Covered by `tests/rate_limit.rs::wrapper_message_flood_closes_session` + unit tests in `rate_limit::tests`. | GREEN  |
 | TM-RATE.4  | Per-session memory cap `PHONE_BUFFER_BYTES_CAP = 64 KiB`, drop oldest on overflow (session.rs:24) | GREEN  |
 | TM-RATE.5  | FD exhaustion: systemd LimitNOFILE + warning alert at 80%                                   | TODO   |
 | TM-RATE.6  | Slow-write defense: bounded channel + timeout on sink send                                  | TODO   |

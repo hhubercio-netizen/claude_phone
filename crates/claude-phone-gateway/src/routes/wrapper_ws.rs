@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, State};
@@ -10,7 +11,7 @@ use futures::{SinkExt, StreamExt};
 use claude_phone_shared::protocol::{ControlMessage, ErrorCode, ErrorMessage, ServerHello};
 
 use crate::auth::verify_api_key;
-use crate::rate_limit::AuthRateLimiter;
+use crate::rate_limit::{AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC};
 use crate::session::{Frame, SessionRegistry};
 
 #[derive(Clone)]
@@ -138,7 +139,14 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
 
     let session_outgoing = session.clone();
     let cancel_outgoing = session.cancel.clone();
+    let session_for_flood = session.clone();
     let outgoing_task = tokio::spawn(async move {
+        // TM-RATE.3 — per-connection sliding-window cap. Wrapper→phone is the
+        // PTY direction so bursts during `claude` output are expected. Cap at
+        // GW_TO_PHONE_MSG_PER_SEC (1000/s). A peer exceeding this is either
+        // malfunctioning or hostile; either way we close the session rather
+        // than absorb unbounded traffic.
+        let mut conn_rate = ConnRateLimiter::new(GW_TO_PHONE_MSG_PER_SEC);
         loop {
             let cancelled = cancel_outgoing.cancelled();
             tokio::pin!(cancelled);
@@ -153,6 +161,17 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
                         Message::Close(_) => break,
                         _ => continue,
                     };
+                    if !conn_rate.check(Instant::now()) {
+                        tracing::warn!(
+                            peer = %peer,
+                            cap = GW_TO_PHONE_MSG_PER_SEC,
+                            "TM-RATE.3: wrapper exceeded per-connection msg rate, closing"
+                        );
+                        // Cancelling the session also tears the phone side
+                        // down — a flooding wrapper invalidates the session.
+                        session_for_flood.cancel.cancel();
+                        break;
+                    }
                     // Snapshot the sender under the lock, then release before
                     // the potentially-blocking send. If no phone is attached,
                     // binary frames go to the replay buffer; text frames are
