@@ -660,10 +660,11 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-SECRET.7 | main.rs `has_public_url: bool` instead of `?public_url`                                     | GREEN  |
 | TM-SECRET.8 | Pre-commit gitleaks scan; blocks commit on secret-shaped strings                            | TODO   |
 | TM-SECRET.9 | `*-dev.toml` gitignored                                                                     | GREEN  |
-| TM-SECRET.10 | Wrapper user config file perms 0600 enforced on load                                        | TODO   |
+| TM-SECRET.10 | Wrapper user config file perms 0600 enforced on load                                        | GREEN (`WrapperConfig::load` checks `mode & 0o077 != 0` and `bail!`s with a chmod hint; Unix-only, Windows relies on user-profile ACL) |
 | TM-SECRET.11 | Opaque error chain in gateway responses (no internal detail in 4xx/5xx body)                | TODO   |
 | TM-SECRET.12 | gateway-dev.toml placeholder (invalid length → fail-loud)                                   | GREEN  |
 | TM-SECRET.13 | git history scrub: verify no historical secret-shaped commits                                | TODO   |
+| TM-SECRET.14 | Wrapper log file perms 0600 (peer IPs, RPC URL, error contexts)                              | GREEN (`init_file_logging` opens both the probe and the tracing writer via a shared `restricted_open` helper that sets Unix `mode(0o600)`; rotation-on-the-fly re-applies the mode) |
 
 ### Supply chain (TM-SUPPLY)
 
