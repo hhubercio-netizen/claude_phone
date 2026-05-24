@@ -88,6 +88,12 @@ export function PasteModal({ open, onClose, onSend }: Props) {
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
+          // TM-FRONT.11: paste contents may be anything the user typed -
+          // including secrets and prompt fragments. Browser autofill / form
+          // managers / mobile keyboard suggestion strips can inject prior
+          // entries here, leaking them across sessions. The paired
+          // `tests/PasteModal.test.tsx` pins this attribute.
+          autoComplete="off"
         />
         <div className={styles.footer}>
           <span className={tooBig ? styles.warn : styles.muted}>

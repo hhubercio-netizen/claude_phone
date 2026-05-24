@@ -706,7 +706,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-FRONT.8  | X-Frame-Options DENY                                                                        | GREEN  |
 | TM-FRONT.9  | X-Content-Type-Options nosniff                                                              | GREEN  |
 | TM-FRONT.10 | Subresource Integrity for any external scripts (currently zero — verify)                    | VERIFY |
-| TM-FRONT.11 | Disable autofill on session input fields (`autocomplete="off"`)                             | TODO   |
+| TM-FRONT.11 | Disable autofill on session input fields (`autocomplete="off"`)                             | GREEN (`InputBar.tsx` and `PasteModal.tsx` set `autoComplete="off"` plus the `autoCapitalize`/`autoCorrect`/`spellCheck` cluster; `tests/InputBar.test.tsx` and `tests/PasteModal.test.tsx` each pin the full cluster via `getAttribute` — a regression that removes any one attribute fails) |
 | TM-FRONT.12 | Cross-Origin-Opener-Policy `same-origin`                                                    | DEFER (P2) |
 | TM-FRONT.13 | Cross-Origin-Embedder-Policy `require-corp`                                                 | DEFER (P2) |
 

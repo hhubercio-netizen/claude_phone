@@ -98,6 +98,21 @@ describe('InputBar', () => {
     );
   });
 
+  it('input opts out of browser autofill and typing assistance (TM-FRONT.11)', () => {
+    // TM-FRONT.11 forward-looking. Every keystroke here is forwarded to a
+    // live claude PTY — autocomplete suggestions / browser form managers
+    // / OS keyboard predictions injecting past entries would surface as
+    // spurious bytes on the wire AND cross-session leak. The attribute
+    // set predates this test; pinning it explicitly catches a regression
+    // that removes any one of them.
+    render(<InputBar onBytes={() => {}} />);
+    const input = screen.getByPlaceholderText(/type to send/i) as HTMLInputElement;
+    expect(input.getAttribute('autocomplete')).toBe('off');
+    expect(input.getAttribute('autocapitalize')).toBe('off');
+    expect(input.getAttribute('autocorrect')).toBe('off');
+    expect(input.getAttribute('spellcheck')).toBe('false');
+  });
+
   it('defers diff emission during IME composition', () => {
     // While the OS IME is composing (e.g. typing a Kanji), every
     // intermediate value is provisional — streaming each provisional

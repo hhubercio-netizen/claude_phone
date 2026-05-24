@@ -80,6 +80,25 @@ describe('PasteModal', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('textarea opts out of browser autofill (TM-FRONT.11)', () => {
+    // TM-FRONT.11 forward-looking. Paste contents are arbitrary user-typed
+    // text — including past prompts, snippets, and occasionally secrets.
+    // Browser autofill / OS keyboard suggestion strips happily inject
+    // entries from prior sessions across same-origin contexts; the
+    // explicit opt-out is the only safeguard. A regression that flips
+    // the attribute on (`autocomplete="on"` is the HTML default for
+    // textareas) must fail this test.
+    render(<PasteModal open onClose={vi.fn()} onSend={vi.fn()} />);
+    const ta = screen.getByPlaceholderText(/Type or paste/i) as HTMLTextAreaElement;
+    expect(ta.getAttribute('autocomplete')).toBe('off');
+    // Sanity: the sibling typing-discipline opt-outs must not regress
+    // alongside autoComplete - they were here first and are load-bearing
+    // for the iOS pasteboard UX. Bundling them defends the whole cluster.
+    expect(ta.getAttribute('autocapitalize')).toBe('off');
+    expect(ta.getAttribute('autocorrect')).toBe('off');
+    expect(ta.getAttribute('spellcheck')).toBe('false');
+  });
+
   it('does not leak modal content to storage', () => {
     const SECRET = 'my-paste-content-' + 'X'.repeat(20);
     render(<PasteModal open onClose={vi.fn()} onSend={vi.fn()} />);
