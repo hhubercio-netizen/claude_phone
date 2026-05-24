@@ -110,6 +110,20 @@ install_fail2ban() {
     systemctl restart fail2ban
 }
 
+# TM-INFRA.5 — auditd watch rules for config, install dir, unit file,
+# sshd drop-in. Idempotent. `augenrules --load` rebuilds /etc/audit/audit.rules
+# from rules.d/* and signals auditd to reload — no service restart needed.
+install_auditd() {
+    if ! command -v augenrules >/dev/null; then
+        echo "auditd not installed; skipping TM-INFRA.5" >&2
+        return 0
+    fi
+    install -d -m 0755 /etc/audit/rules.d
+    install -m 0640 "$REPO_DIR/deploy/auditd/claude-phone.rules" \
+        /etc/audit/rules.d/claude-phone.rules
+    augenrules --load
+}
+
 start_services() {
     systemctl enable --now claude-phone-gateway
     systemctl restart caddy 2>/dev/null || true
@@ -124,6 +138,7 @@ install_systemd
 install_caddy_note
 install_sshd_dropin
 install_fail2ban
+install_auditd
 start_services
 
 systemctl status --no-pager claude-phone-gateway || true

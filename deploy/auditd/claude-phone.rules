@@ -1,0 +1,40 @@
+# TM-INFRA.5 — claude-phone auditd watch rules. Loaded after distro
+# defaults by `augenrules --load`, called from deploy.sh::install_auditd.
+#
+# Rationale: a compromised gateway running as the unprivileged
+# `claude-phone` user is contained by TM-INFRA.1 (systemd ProtectSystem,
+# ReadOnlyPaths) and TM-INFRA.11 (no shell, dropped caps). But a host
+# compromise that escalates to root can still rewrite our config, our
+# binary, our unit file, or our sshd drop-in — those tampers must leave
+# a forensic trail even if the rest of the host is corrupted.
+#
+# All rules use -p wa (write + attribute change). -k <key> tags the
+# event so `ausearch -k claude-phone-config` and friends are one-liners
+# for the operator.
+#
+# Why no -p r read-audit: every successful gateway start would emit
+# audit events for reading gateway.toml, drowning the signal. Writes
+# are the suspicious operation; reads are mundane.
+
+# Watch the config dir — any write attempt is audited. Covers
+# gateway.toml AND the operator-populated ssh-allowlist / cf-ipv4 /
+# cf-ipv6 files that setup-ufw.sh consumes (TM-INFRA.2).
+-w /etc/claude-phone/ -p wa -k claude-phone-config
+
+# Watch the install dir — any write to bin/ or web/ is audited. A
+# rogue process replacing the gateway binary or static assets is a
+# critical signal. The dir is ReadOnlyPaths in systemd so the gateway
+# itself cannot write here; any write seen here is by definition not
+# the gateway.
+-w /opt/claude-phone/ -p wa -k claude-phone-bin
+
+# Watch the unit file — modifications by anything other than
+# `deploy.sh` (which writes the file then daemon-reloads) are
+# suspicious. A subtle attacker would target this file to disable
+# SystemCallFilter or LimitCORE.
+-w /etc/systemd/system/claude-phone-gateway.service -p wa -k claude-phone-unit
+
+# Watch the sshd drop-in. PermitRootLogin=no / PasswordAuthentication=no
+# are the keystone of TM-INFRA.3; any tamper here erodes the whole
+# SSH posture.
+-w /etc/ssh/sshd_config.d/99-claude-phone.conf -p wa -k claude-phone-sshd

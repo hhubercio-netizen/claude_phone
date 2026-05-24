@@ -116,4 +116,23 @@ else
     echo "  (fail2ban-regex unavailable on this host — skipping regex assert)"
 fi
 
+# TM-INFRA.5 — auditd rules file must exist and contain the four
+# watch keys spec'd in 4.9 §2.5. Presence-only: live auditctl/augenrules
+# verification is post_deploy_verify.sh's job on the deploy host.
+echo "[security_invariants] auditd watch rules ..."
+AUDITD_RULES=deploy/auditd/claude-phone.rules
+[ -f "${AUDITD_RULES}" ] \
+    || { echo "MISSING ${AUDITD_RULES} — TM-INFRA.5"; exit 1; }
+for key in \
+    "^-w /etc/claude-phone/ -p wa -k claude-phone-config" \
+    "^-w /opt/claude-phone/ -p wa -k claude-phone-bin" \
+    "^-w /etc/systemd/system/claude-phone-gateway.service -p wa -k claude-phone-unit" \
+    "^-w /etc/ssh/sshd_config.d/99-claude-phone.conf -p wa -k claude-phone-sshd"
+do
+    grep -qE "${key}" "${AUDITD_RULES}" \
+        || { echo "MISSING auditd rule in ${AUDITD_RULES}: ${key} — TM-INFRA.5"; exit 1; }
+done
+grep -qF 'install_auditd' deploy/scripts/deploy.sh \
+    || { echo "MISSING install_auditd wiring in deploy.sh — TM-INFRA.5"; exit 1; }
+
 echo "[security_invariants] OK"
