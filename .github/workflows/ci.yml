@@ -69,6 +69,20 @@ jobs:
       - name: systemd-analyze verify
         run: systemd-analyze verify deploy/systemd/claude-phone-gateway.service
 
+  deploy-scripts:
+    name: deploy scripts shellcheck (TM-INFRA.2 etc.)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # shellcheck is installed by default on ubuntu-latest. Scope is
+      # the deploy/ and scripts/ tree — every shell artifact we ship.
+      - name: shellcheck deploy/ + scripts/
+        run: |
+          shopt -s nullglob
+          shellcheck -x \
+            deploy/scripts/*.sh \
+            scripts/*.sh
+
   cargo-deny:
     name: cargo deny (TM-SUPPLY.4)
     runs-on: ubuntu-latest
