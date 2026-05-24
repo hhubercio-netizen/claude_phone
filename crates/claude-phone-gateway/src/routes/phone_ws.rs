@@ -190,7 +190,19 @@ async fn handle_socket(
                 biased;
                 _ = &mut cancelled => break,
                 msg = stream.next() => {
-                    let Some(Ok(msg)) = msg else { break };
+                    // TM-RATE.7: producer-side break must propagate cancel
+                    // so the whole session tears down promptly when the
+                    // phone is gone. Otherwise the wrapper-bound writer
+                    // and registry slot wait until the keepalive watchdog
+                    // notices the dead socket (up to 30 s + ping timeout),
+                    // which widens the slot-exhaustion attack window: a
+                    // peer that opens then drops sessions in a tight loop
+                    // would otherwise hold `max_sessions` slots open well
+                    // past the moment they were abandoned.
+                    let Some(Ok(msg)) = msg else {
+                        cancel_outgoing.cancel();
+                        break;
+                    };
                     let frame = match msg {
                         Message::Binary(b) => {
                             // Phone is a remote keyboard, not a terminal-
@@ -208,7 +220,10 @@ async fn handle_socket(
                             Frame::Binary(cleaned)
                         }
                         Message::Text(t) => Frame::Text(t),
-                        Message::Close(_) => break,
+                        Message::Close(_) => {
+                            cancel_outgoing.cancel();
+                            break;
+                        }
                         // TM-RATE.7: stamp last_pong on every received Pong.
                         Message::Pong(_) => {
                             last_pong_outgoing.store(

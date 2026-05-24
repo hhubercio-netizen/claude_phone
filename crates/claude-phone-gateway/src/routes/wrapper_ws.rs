@@ -165,11 +165,24 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
                 biased;
                 _ = &mut cancelled => break,
                 msg = stream.next() => {
-                    let Some(Ok(msg)) = msg else { break };
+                    // TM-RATE.7: producer-side break must propagate cancel
+                    // so `incoming_task` wakes up immediately. Without this
+                    // the `join!` waits until the keepalive watchdog notices
+                    // the dead socket (up to 30 s + ping timeout), pinning
+                    // the session slot in `state.registry` well past the
+                    // moment the peer is actually gone — slow drain of
+                    // `max_sessions` under a churning peer pattern.
+                    let Some(Ok(msg)) = msg else {
+                        cancel_outgoing.cancel();
+                        break;
+                    };
                     let frame = match msg {
                         Message::Binary(b) => Frame::Binary(b),
                         Message::Text(t) => Frame::Text(t),
-                        Message::Close(_) => break,
+                        Message::Close(_) => {
+                            cancel_outgoing.cancel();
+                            break;
+                        }
                         // TM-RATE.7: stamp last_pong on every received Pong.
                         // The keepalive in incoming_task reads this to decide
                         // whether the peer is still reachable.
