@@ -1,0 +1,120 @@
+name: CT monitor (TM-TLS.4)
+
+# Certificate Transparency log monitor. Polls crt.sh once a day for
+# certs issued under `claude-phone.pl`, diffs against a cached baseline
+# of serial numbers, and opens / appends to a GitHub Issue + fails the
+# job if a novel serial appears. The Issue surfaces in the GitHub
+# inbox; the failed-job badge is a backstop in case notifications are
+# missed.
+#
+# TM-TLS.4. The cron line `'0 6 * * *'` is asserted by
+# scripts/security_invariants.sh — DO NOT change it here without
+# updating the regression check there, or the gate will trip.
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  ct-monitor:
+    name: crt.sh diff for claude-phone.pl
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore CT baseline cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .ct-baseline
+          key: v1-ct-baseline-${{ github.run_id }}
+          restore-keys: |
+            v1-ct-baseline-
+
+      - name: Run ct_monitor.sh
+        id: ct
+        run: |
+          set +e
+          bash scripts/ct_monitor.sh | tee ct_monitor.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          case "${rc}" in
+            0) echo "ct_monitor: clean" ;;
+            1) echo "novel=1" >> "$GITHUB_OUTPUT"; echo "ct_monitor: novel cert(s) detected" ;;
+            2) echo "ct_monitor: crt.sh unreachable — soft skip" ;;
+            *) echo "ct_monitor: unexpected exit ${rc}"; exit "${rc}" ;;
+          esac
+
+      # Save baseline even on novel-cert failure: the script has already
+      # moved the new set into place, so without this step the next run
+      # would re-alert on the same serial. `if: always()` guarantees the
+      # save after the Run step regardless of the later Fail step.
+      - name: Save CT baseline cache
+        if: always() && hashFiles('.ct-baseline') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .ct-baseline
+          key: v1-ct-baseline-${{ github.run_id }}
+
+      - name: Open or update tracking issue
+        if: steps.ct.outputs.novel == '1'
+        uses: actions/github-script@v7
+        env:
+          CT_LOG_PATH: ct_monitor.log
+        with:
+          script: |
+            const fs = require('fs');
+            const log = fs.readFileSync(process.env.CT_LOG_PATH, 'utf8');
+            const today = new Date().toISOString().slice(0, 10);
+            const title = 'CT monitor: novel cert(s) on claude-phone.pl — REVIEW';
+            const body = [
+              `**${today}**: daily crt.sh diff detected one or more certificate serial(s) ` +
+              `not present in the previous baseline.`,
+              '',
+              '```',
+              log.trim(),
+              '```',
+              '',
+              '**Triage:**',
+              '1. Check the Cloudflare dashboard for a recent edge-cert rotation (legitimate).',
+              '2. If unexpected: revoke the cert via the issuing CA, rotate API tokens, audit DNS/registrar account access, and rotate session tokens for active users.',
+              '',
+              'TM-TLS.4 — see `docs/superpowers/specs/2026-05-23-threat-model.md`.',
+            ].join('\n');
+
+            const { data: openIssues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const match = openIssues.find((i) => i.title === title);
+
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body,
+              });
+              core.notice(`Appended to existing tracking issue #${match.number}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+              core.notice(`Opened tracking issue #${created.number}`);
+            }
+
+      - name: Fail job on novel cert
+        if: steps.ct.outputs.novel == '1'
+        run: |
+          echo "Novel CT-log certificate(s) detected — tracking issue opened/updated above"
+          exit 1
