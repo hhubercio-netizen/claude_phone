@@ -624,9 +624,9 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
-| TM-INPUT.1 | Strip OSC 52 (clipboard write) in gateway phone→wrapper direction                            | TODO   |
-| TM-INPUT.2 | Strip OSC 8 (hyperlinks) in gateway phone→wrapper direction                                  | TODO   |
-| TM-INPUT.3 | Reject DCS/APC/PM/SOS in gateway phone→wrapper direction                                     | TODO   |
+| TM-INPUT.1 | Strip OSC 52 (clipboard write) in gateway phone→wrapper direction                            | GREEN (`sanitize_phone_input` in `phone_ws.rs` strips every `ESC ]` OSC sequence including OSC 52; unit tests pin OSC-52 BEL- and ST-terminated cases; asymmetric guard asserts the call site is phone-only) |
+| TM-INPUT.2 | Strip OSC 8 (hyperlinks) in gateway phone→wrapper direction                                  | GREEN (same sanitizer drops every OSC, OSC 8 included; CSI / SS3 / bracketed-paste preserved by allow-list) |
+| TM-INPUT.3 | Reject DCS/APC/PM/SOS in gateway phone→wrapper direction                                     | GREEN (sanitizer also strips `ESC P` DCS, `ESC _` APC, `ESC ^` PM, `ESC X` SOS; truncated sequences drop the remainder so a half-built OSC cannot leak into the PTY) |
 | TM-INPUT.4 | Audit xterm.js CSI/DCS handlers; disable OSC 52, OSC 8 client-side                           | TODO   |
 | TM-INPUT.5 | `serde_json::Deserializer::set_max_recursion` on all WS JSON parsing                         | TODO   |
 | TM-INPUT.6 | Path traversal: tower-http ServeDir reject `..` (verify via test)                            | TODO   |
@@ -644,7 +644,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-RATE.5  | FD exhaustion: systemd LimitNOFILE + warning alert at 80%                                   | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitNOFILE=8192`; 80% alert deferred per sub-spec 4.9 §1.1, observability owned by future 4.4) |
 | TM-RATE.6  | Slow-write defense: bounded mpsc channels (256 frames, `registry.rs`) plus `SINK_SEND_TIMEOUT = 5 s` wrapping every `sink.send` in both `wrapper_ws::incoming_task` and `phone_ws::incoming_task`; timeout / error cancels the session via `session.cancel.cancel()`. Constant-bounds covered by `tests/rate_limit.rs::sink_send_timeout_is_bounded_and_reasonable`; wiring is enforced at compile time via the `SINK_SEND_TIMEOUT` import in both routes (clippy `-D warnings` would catch unused-import regression). | GREEN  |
 | TM-RATE.7  | Post-hello idle / no-pong watchdog: every `Message::Pong` stamps `last_pong_ms: Arc<AtomicU64>` (millis since socket open); every 30 s keepalive tick checks `age > PONG_DEADLINE` (90 s) and cancels the session if so. Wired into both `wrapper_ws.rs` and `phone_ws.rs`. Constant-bounds covered by `tests/rate_limit.rs::pong_deadline_is_bounded_and_reasonable`; wiring is enforced at compile time via `PONG_DEADLINE` imports in both routes. | GREEN  |
-| TM-RATE.8  | Slow-loris recv_hello timeout 10 s on wrapper_ws                                            | GREEN  |
+| TM-RATE.8  | Slow-loris recv_hello timeout 10 s on wrapper_ws AND phone_ws                               | GREEN (`HELLO_TIMEOUT` in `wrapper_ws.rs`, `PHONE_HELLO_TIMEOUT` in `phone_ws.rs`; phone requires a `phone_hello` first frame before any binary bytes reach the PTY; e2e test `phone_ws_requires_phone_hello_before_bridging` pins the gate) |
 | TM-RATE.9  | Slow-loris HTTP upgrade timeout: `hyper_util::server::conn::auto` with `http1.header_read_timeout(10s)` via `serve::run` (replaces `axum::serve` which doesn't surface the knob); covered by `tests/rate_limit.rs::slow_loris_header_read_timeout` | GREEN  |
 
 ### Secrets management (TM-SECRET)
@@ -682,7 +682,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-INFRA.1  | systemd hardening block (NoNewPrivileges, ProtectSystem=strict, ProtectHome, PrivateTmp, PrivateDevices, RestrictAddressFamilies, SystemCallFilter, CapabilityBoundingSet=, MemoryDenyWriteExecute, LockPersonality) | GREEN (`deploy/systemd/claude-phone-gateway.service` adds `SystemCallFilter=@system-service ~@privileged ~@resources` with `SystemCallErrorNumber=EPERM`; remaining directives already present pre-4.9) |
 | TM-INFRA.2  | ufw default deny incoming; allow 22 from trusted IPs; allow 443 from CF IP ranges only      | GREEN (`deploy/scripts/setup-ufw.sh` idempotent apply script; reads `/etc/claude-phone/ssh-allowlist` + `cf-ipv4`/`cf-ipv6`; fails-loud on missing/empty input) |
 | TM-INFRA.3  | sshd hardening: PermitRootLogin no, PasswordAuthentication no, AllowUsers whitelist, MaxAuthTries 3, LoginGraceTime 30 | GREEN (`deploy/sshd/99-claude-phone.conf` drop-in installed by `deploy.sh::install_sshd_dropin` with `sshd -t` gate; AllowUsers stays in a host-specific `98-allow-users.conf` outside the repo) |
-| TM-INFRA.4  | fail2ban: sshd jail + recidive jail + claude-phone jail (watches gateway auth-failure log)  | TODO   |
+| TM-INFRA.4  | fail2ban: sshd jail + recidive jail + claude-phone jail (watches gateway auth-failure log)  | GREEN (`deploy/fail2ban/jail.local` + `filter.d/claude-phone.conf` installed by `deploy.sh::install_fail2ban`; `scripts/fail2ban_filter_test.sh` asserts the filter against a canned 4.2-shaped auth-failure JSON sample, hooked into `security_invariants.sh`) |
 | TM-INFRA.5  | auditd watch on `/etc/claude-phone/`, `/opt/claude-phone/`, `/etc/systemd/system/claude-phone-gateway.service` | TODO |
 | TM-INFRA.6  | systemd LimitNOFILE, MemoryMax, CPUQuota                                                    | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitNOFILE=8192`, `MemoryMax=256M`, `CPUQuota=80%`) |
 | TM-INFRA.7  | Cloudflare WAF rules (Free tier): block common-scan paths (/.git, /.env, /wp-admin)         | TODO   |

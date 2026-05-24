@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use futures::{SinkExt, StreamExt};
 
 use claude_phone_shared::protocol::{
-    ControlMessage, ErrorCode, ErrorMessage, PeerStatus, ServerHello,
+    ControlMessage, ErrorCode, ErrorMessage, PeerStatus, PhoneHello, ServerHello,
 };
 use claude_phone_shared::SessionToken;
 
@@ -31,6 +31,13 @@ pub struct PhoneWsState {
 /// keystrokes are tiny. 64KB is way above what either side needs and well
 /// below what an attacker could use to OOM the gateway.
 const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
+
+/// Time the phone has to send its `phone_hello` after the WS upgrade
+/// resolves and the session attach succeeds. Mirrors `HELLO_TIMEOUT` in
+/// wrapper_ws — a real browser sends the hello in milliseconds. Without
+/// this bound an attacker holding a leaked token could open the socket
+/// and squat without identifying itself, costing a registry slot.
+const PHONE_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 pub async fn handler(
     ws: WebSocketUpgrade,
@@ -99,6 +106,34 @@ async fn handle_socket(
     };
 
     let session_id = handle.session.id.clone();
+
+    // Require `phone_hello` as the first frame after attach. The hello:
+    // (a) commits the phone to the protocol — a random probe that just
+    //     opened the socket gets bounced as ProtocolViolation instead of
+    //     receiving ServerHello and being able to forward keystrokes;
+    // (b) verifies the token in the hello body matches the URL token,
+    //     defense-in-depth against future protocol changes that might
+    //     decouple them, and a small barrier to scripted abusers.
+    // We do NOT send `peer_up` to the wrapper until after the hello
+    // succeeds, so a bouncing-bad-phone never produces a phantom
+    // peer-connect/peer-disconnect pair in the wrapper's log.
+    if let Err(why) = recv_phone_hello(&mut socket, &token).await {
+        tracing::warn!(
+            session_id = %session_id,
+            peer = %peer,
+            reason = why,
+            "TM-WS phone_hello rejected — closing"
+        );
+        send_error(&mut socket, ErrorCode::ProtocolViolation, why.into()).await;
+        // Cleanup attach without notifying wrapper. We never sent peer_up,
+        // so we owe no peer_down.
+        let mut slot = handle.session.to_phone.lock().await;
+        slot.detach();
+        drop(slot);
+        handle.session.touch_phone().await;
+        return;
+    }
+
     let server_hello = ControlMessage::ServerHello(ServerHello {
         session_id: session_id.clone(),
         peer_connected: true,
@@ -157,7 +192,21 @@ async fn handle_socket(
                 msg = stream.next() => {
                     let Some(Ok(msg)) = msg else { break };
                     let frame = match msg {
-                        Message::Binary(b) => Frame::Binary(b),
+                        Message::Binary(b) => {
+                            // Phone is a remote keyboard, not a terminal-
+                            // control channel. Strip OSC / DCS / APC / PM
+                            // / SOS sequences (OSC 52 clipboard-set, sixel
+                            // graphics, etc.) so a bearer with a leaked
+                            // token cannot hijack the host terminal's
+                            // clipboard or paint a fake prompt. CSI and
+                            // SS3 (arrow keys, function keys, bracketed
+                            // paste) are preserved.
+                            let cleaned = sanitize_phone_input(&b);
+                            if cleaned.is_empty() {
+                                continue;
+                            }
+                            Frame::Binary(cleaned)
+                        }
                         Message::Text(t) => Frame::Text(t),
                         Message::Close(_) => break,
                         // TM-RATE.7: stamp last_pong on every received Pong.
@@ -292,4 +341,180 @@ async fn send_error(socket: &mut WebSocket, code: ErrorCode, message: String) {
             serde_json::to_string(&err).expect("ErrorMessage serializes (static struct)"),
         ))
         .await;
+}
+
+/// Read and validate the phone's `phone_hello`. On success returns `Ok(())`
+/// (the body is currently unused beyond presence + token-equality, but the
+/// signature is shaped so callers can later thread `cols`/`rows` into a
+/// Resize forwarded to the wrapper). On any failure returns `Err(&'static
+/// str)` with a stable reason string — fed to both tracing and the
+/// ProtocolViolation message body. Reasons are deliberately coarse so they
+/// don't act as a probe oracle ("you sent text but wrong shape" vs "wrong
+/// token" leaks structural info).
+async fn recv_phone_hello(
+    socket: &mut WebSocket,
+    url_token: &SessionToken,
+) -> Result<(), &'static str> {
+    let msg = tokio::time::timeout(PHONE_HELLO_TIMEOUT, socket.recv())
+        .await
+        .map_err(|_| "phone_hello timeout")?
+        .ok_or("socket closed before phone_hello")?
+        .map_err(|_| "socket error before phone_hello")?;
+    let Message::Text(t) = msg else {
+        return Err("expected text phone_hello");
+    };
+    let parsed: ControlMessage =
+        serde_json::from_str(&t).map_err(|_| "phone_hello not valid JSON")?;
+    let ControlMessage::PhoneHello(PhoneHello { token, .. }) = parsed else {
+        return Err("expected phone_hello");
+    };
+    // Constant-time compare via SessionToken::ct_eq. The URL-side token has
+    // already been authoritatively validated above; this check exists so a
+    // future protocol change that routed a separate token through the hello
+    // body can't quietly desync from the URL.
+    if !token.ct_eq(url_token) {
+        return Err("phone_hello token mismatch");
+    }
+    Ok(())
+}
+
+/// Strip Operating-System-Command (OSC, `ESC ]`), Device-Control-String
+/// (DCS, `ESC P`), Application-Program-Command (APC, `ESC _`),
+/// Privacy-Message (PM, `ESC ^`), and Start-of-String (SOS, `ESC X`)
+/// sequences from phone-supplied input before it reaches the wrapper PTY.
+///
+/// The phone is a remote keyboard: there is no legitimate reason for a
+/// browser to inject OSC 52 (clipboard set), sixel/DCS graphics, or APC
+/// metadata. A bearer with a leaked SessionToken can otherwise hijack the
+/// host's clipboard or repaint the screen with a fake prompt and trick
+/// the host user into pasting a malicious command.
+///
+/// CSI (`ESC [ ...`) and SS3 (`ESC O ...`) are intentionally preserved —
+/// arrow keys, function keys, Home/End/PgUp/PgDn, and bracketed-paste
+/// markers belong to those families and the wrapper user expects them.
+///
+/// The entire offending sequence is removed from the `ESC` introducer
+/// through the string terminator (`BEL` or `ESC \`) inclusive. If a
+/// terminator never arrives (truncated frame), the rest of the buffer is
+/// dropped — better to swallow a keystroke than to leak a half-built OSC
+/// into the PTY where the host terminal would still parse it.
+fn sanitize_phone_input(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0x1b && i + 1 < bytes.len() {
+            let n = bytes[i + 1];
+            // OSC=`]`, DCS=`P`, APC=`_`, PM=`^`, SOS=`X`. CSI=`[` and SS3=`O`
+            // fall through to the `out.push(b)` branch on purpose.
+            if matches!(n, b']' | b'P' | b'_' | b'^' | b'X') {
+                let mut j = i + 2;
+                while j < bytes.len() {
+                    if bytes[j] == 0x07 {
+                        j += 1;
+                        break;
+                    }
+                    if bytes[j] == 0x1b && j + 1 < bytes.len() && bytes[j + 1] == b'\\' {
+                        j += 2;
+                        break;
+                    }
+                    j += 1;
+                }
+                i = j;
+                continue;
+            }
+        }
+        out.push(b);
+        i += 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_phone_input;
+
+    #[test]
+    fn passes_through_printable_ascii() {
+        let input = b"hello world\n";
+        assert_eq!(sanitize_phone_input(input), input.to_vec());
+    }
+
+    #[test]
+    fn preserves_csi_arrow_keys() {
+        // ESC [ A (up), ESC [ B (down), ESC [ C (right), ESC [ D (left)
+        let input = b"\x1b[A\x1b[B\x1b[C\x1b[D";
+        assert_eq!(sanitize_phone_input(input), input.to_vec());
+    }
+
+    #[test]
+    fn preserves_ss3_function_keys() {
+        // ESC O P (F1), ESC O Q (F2), ESC O R (F3), ESC O S (F4)
+        let input = b"\x1bOP\x1bOQ\x1bOR\x1bOS";
+        assert_eq!(sanitize_phone_input(input), input.to_vec());
+    }
+
+    #[test]
+    fn preserves_bracketed_paste_markers() {
+        let input = b"\x1b[200~paste-body\x1b[201~";
+        assert_eq!(sanitize_phone_input(input), input.to_vec());
+    }
+
+    #[test]
+    fn strips_osc_52_clipboard_with_bel_terminator() {
+        // OSC 52 ; c ; <base64> BEL — the classic clipboard hijack.
+        let input = b"before\x1b]52;c;QUJD\x07after";
+        assert_eq!(sanitize_phone_input(input), b"beforeafter".to_vec());
+    }
+
+    #[test]
+    fn strips_osc_with_st_terminator() {
+        // ESC \ (0x1b 0x5c) is the canonical String Terminator.
+        let input = b"before\x1b]0;title\x1b\\after";
+        assert_eq!(sanitize_phone_input(input), b"beforeafter".to_vec());
+    }
+
+    #[test]
+    fn strips_dcs() {
+        let input = b"a\x1bPq#sixel-payload\x1b\\b";
+        assert_eq!(sanitize_phone_input(input), b"ab".to_vec());
+    }
+
+    #[test]
+    fn strips_apc_pm_sos() {
+        for introducer in [b'_', b'^', b'X'] {
+            let mut input = vec![b'a', 0x1b, introducer];
+            input.extend_from_slice(b"payload");
+            input.extend_from_slice(b"\x1b\\");
+            input.push(b'b');
+            assert_eq!(
+                sanitize_phone_input(&input),
+                b"ab".to_vec(),
+                "introducer 0x{:02x} should be stripped",
+                introducer
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_osc_drops_remainder() {
+        // No terminator before end-of-buffer: drop everything from ESC ].
+        let input = b"safe\x1b]52;c;UNTERMINATED";
+        assert_eq!(sanitize_phone_input(input), b"safe".to_vec());
+    }
+
+    #[test]
+    fn lone_trailing_esc_preserved() {
+        // A bare ESC at end-of-buffer has no introducer to classify — leave
+        // it so an interactive ESC key (sent as a single byte, the terminator
+        // arrives in the next frame) is still delivered. The wrapper PTY
+        // line discipline will reassemble.
+        let input = b"abc\x1b";
+        assert_eq!(sanitize_phone_input(input), input.to_vec());
+    }
+
+    #[test]
+    fn empty_input_yields_empty() {
+        assert_eq!(sanitize_phone_input(b""), Vec::<u8>::new());
+    }
 }

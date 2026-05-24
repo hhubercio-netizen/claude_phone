@@ -174,6 +174,74 @@ async fn phone_rejects_unknown_token() {
     assert!(matches!(msg, ControlMessage::Error(_)));
 }
 
+/// Phone WS MUST require `phone_hello` as the first post-attach frame and
+/// MUST reject anything else with `ProtocolViolation`. Pins the M1 gate so
+/// a future refactor that removes `recv_phone_hello` (or accidentally lets
+/// raw binary keystrokes through before the hello) trips CI red. The
+/// concrete attack motivation is OSC-52 clipboard hijack via a leaked
+/// token; the structural invariant is "phone must commit to the protocol
+/// before its bytes reach the PTY".
+#[tokio::test]
+async fn phone_ws_requires_phone_hello_before_bridging() {
+    use claude_phone_shared::protocol::ErrorCode;
+
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let port = spawn_test_gateway(api_key.clone()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Register the wrapper so the token is known — otherwise the gateway
+    // would respond with `InvalidToken` before ever reaching the hello gate
+    // and the test would pass for the wrong reason.
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    wrapper_ws
+        .send(Message::Text(
+            serde_json::to_string(&ControlMessage::WrapperHello(WrapperHello {
+                api_key,
+                token: token.clone(),
+                cols: 80,
+                rows: 24,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    let (mut phone_ws, _) = tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{port}/api/phone/{}",
+        token.as_str()
+    ))
+    .await
+    .expect("phone connect");
+
+    // Send a WRONG first frame — raw binary instead of phone_hello. A pre-M1
+    // gateway would forward this to the wrapper PTY as keystrokes.
+    phone_ws
+        .send(Message::Binary(b"\x1b]52;c;QUJD\x07".to_vec()))
+        .await
+        .unwrap();
+
+    let resp = phone_ws.next().await.unwrap().unwrap();
+    let text = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected ProtocolViolation text frame, got {other:?}"),
+    };
+    let msg: ControlMessage = serde_json::from_str(&text).unwrap();
+    let err = match msg {
+        ControlMessage::Error(e) => e,
+        other => panic!("expected Error, got {other:?}"),
+    };
+    assert_eq!(
+        err.code,
+        ErrorCode::ProtocolViolation,
+        "first non-hello frame must yield ProtocolViolation"
+    );
+}
+
 // Build a tungstenite ws:// request with an explicit Origin header. Browsers
 // always send Origin; non-browser clients (test clients, server-side bridges)
 // may not. The gateway only enforces equality when Origin is present AND
@@ -220,6 +288,22 @@ async fn phone_ws_accepts_matching_origin() {
     let (mut phone_ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .expect("phone connect with matching origin should succeed");
+
+    // Send phone_hello so the gateway lets us past the protocol-commit
+    // gate. Without this the server now responds with an Error
+    // (ProtocolViolation) after PHONE_HELLO_TIMEOUT instead of
+    // ServerHello — the change pins the gate, this line keeps the
+    // origin-equality scenario covered.
+    let phello = ControlMessage::PhoneHello(PhoneHello {
+        token: token.clone(),
+        cols: 80,
+        rows: 24,
+        user_agent: None,
+    });
+    phone_ws
+        .send(Message::Text(serde_json::to_string(&phello).unwrap()))
+        .await
+        .unwrap();
 
     let resp = phone_ws.next().await.unwrap().unwrap();
     let text = match resp {

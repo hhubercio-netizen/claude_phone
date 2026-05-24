@@ -43,11 +43,30 @@ assert_in_both 'public_origin.as_deref'                   'TM-WS.1, .2 Origin ch
 
 # --- Asymmetric (one route only) ------------------------------------------
 
-# HELLO_TIMEOUT is wrapper-only by design (phone has no post-upgrade hello).
-grep -q 'HELLO_TIMEOUT' "$WRAPPER" \
-    || { echo "MISSING HELLO_TIMEOUT in $WRAPPER (TM-RATE.8)"; exit 1; }
-if grep -q 'HELLO_TIMEOUT' "$PHONE"; then
-    echo "UNEXPECTED HELLO_TIMEOUT in $PHONE — phone has no post-upgrade hello"
+# Post-upgrade hello timeout. WRAPPER uses the name `HELLO_TIMEOUT`; phone
+# uses `PHONE_HELLO_TIMEOUT` (disambiguates the two constants inside one
+# binary and lets a reader tell which route a stack trace belongs to). Both
+# routes now require a hello — phone enforces it for TM-INPUT defense in
+# depth, see sanitize_phone_input assertion below.
+grep -qE '^const HELLO_TIMEOUT' "$WRAPPER" \
+    || { echo "MISSING HELLO_TIMEOUT in $WRAPPER (TM-RATE.8 wrapper-side)"; exit 1; }
+grep -qE '^const PHONE_HELLO_TIMEOUT' "$PHONE" \
+    || { echo "MISSING PHONE_HELLO_TIMEOUT in $PHONE (TM-RATE.8 phone-side)"; exit 1; }
+if grep -qE '^const HELLO_TIMEOUT' "$PHONE"; then
+    echo "UNEXPECTED bare HELLO_TIMEOUT in $PHONE — use PHONE_HELLO_TIMEOUT for the phone route"
+    exit 1
+fi
+
+# OSC / DCS / APC / PM / SOS sanitization. Phone-only: the sanitizer runs
+# on every Binary frame in the phone→wrapper direction (xterm.js handles
+# OSC client-side on the wrapper→phone direction, and wrapper_ws receives
+# control frames from the dev-host wrapper which is trusted). Asymmetry
+# guarded: a refactor that mistakenly imports sanitize_phone_input into
+# wrapper_ws.rs would corrupt the trusted wrapper-side data path.
+grep -q 'sanitize_phone_input' "$PHONE" \
+    || { echo "MISSING sanitize_phone_input in $PHONE (TM-INPUT.1/.2/.3)"; exit 1; }
+if grep -q 'sanitize_phone_input' "$WRAPPER"; then
+    echo "UNEXPECTED sanitize_phone_input in $WRAPPER — sanitizer is phone-side only"
     exit 1
 fi
 
