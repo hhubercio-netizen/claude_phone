@@ -743,12 +743,12 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
-| TM-TEST.1  | cargo-fuzz target on ControlMessage / SessionToken / ApiKey parsing                          | TODO   |
-| TM-TEST.2  | proptest: arbitrary ControlMessages → no panic, no infinite loop                             | TODO   |
-| TM-TEST.3  | Negative-path test matrix per guard (rejects invalid X)                                      | PARTIAL (existing leakage tests cover some) |
-| TM-TEST.4  | Pentest-style e2e: malformed frames, oversized hello, replay token, cross-session leak, Origin spoof, concurrent same-token | TODO |
+| TM-TEST.1  | cargo-fuzz target on ControlMessage / SessionToken / ApiKey parsing                          | GREEN (`crates/claude-phone-fuzz/fuzz_targets/{control_message,session_token,api_key}.rs`; nightly smoke job `.github/workflows/fuzz-smoke.yml` runs each target for 60 s on schedule) |
+| TM-TEST.2  | proptest: arbitrary ControlMessages → no panic, no infinite loop                             | GREEN (`crates/claude-phone-shared/tests/proptest_protocol.rs` covers `ControlMessage` round-trip + arbitrary input; `tests/token_test.rs` covers `SessionToken`/`ApiKey` parse fuzz) |
+| TM-TEST.3  | Negative-path test matrix per guard (rejects invalid X)                                      | GREEN (`crates/claude-phone-gateway/tests/negative_path_test.rs` adds gap-filling tests per guard; combined with prior coverage in `tests/e2e_test.rs` and `tests/websocket.rs`) |
+| TM-TEST.4  | Pentest-style e2e: malformed frames, oversized hello, replay token, cross-session leak, Origin spoof, concurrent same-token | GREEN (`crates/claude-phone-gateway/tests/pentest_e2e.rs` — 6 adversarial scenarios spanning all six attacker patterns named in the row) |
 | TM-TEST.5  | Forward-looking grep tests: tracing patterns, derived-Debug patterns                          | GREEN (scripts/check_tracing_secrets.sh + scripts/check_debug_derive_secrets.sh, wired into CI rust job) |
-| TM-TEST.6  | Chaos test: random kill -9 wrapper / phone, gateway recovery + session cleanup                | TODO   |
+| TM-TEST.6  | Chaos test: random kill -9 wrapper / phone, gateway recovery + session cleanup                | GREEN (`crates/claude-phone-gateway/tests/chaos_test.rs` — 3 forward-looking invariants: wrapper-drop releases token, paired wrapper+phone drop reclaims slot ≤1 s, deterministic-seed chaos with N=6 random drops; backed by `wrapper_ws.rs` + `phone_ws.rs` cancel-propagation fix landed in commit `51a9065`) |
 
 ### Cross-cutting / Leakage (TM-LEAK)
 
@@ -757,7 +757,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-LEAK.1  | CI grep: tracing macros with secret-named fields fail build                                  | GREEN (scripts/check_tracing_secrets.sh, CI rust job; safe-marker `// TM-LEAK.1: safe — <reason>`) |
 | TM-LEAK.2  | CI grep heuristic: derived Debug on container with secret-named field flagged for review     | GREEN (scripts/check_debug_derive_secrets.sh, CI rust job; field-type or block-comment escape hatch) |
 | TM-LEAK.3  | CI grep / list: asymmetric guards across routes (Origin missing on routes that should have it) | GREEN (scripts/asymmetric_guards.sh wired into CI via scripts/security_invariants.sh) |
-| TM-LEAK.4  | TM-to-code coverage matrix: every TM-CAT.N appears as comment in code or test               | TODO   |
+| TM-LEAK.4  | TM-to-code coverage matrix: every TM-CAT.N appears as comment in code or test               | GREEN (`scripts/tm_coverage.sh` runs both directions — catalog→references and references→catalog — wired into `scripts/security_invariants.sh` aggregator and as its own named step in `.github/workflows/ci.yml`; 19 anchor annotations added across `crates/`, `web/`, `deploy/`, `scripts/` so every non-TODO/non-DEFER row has a code reference) |
 
 ---
 
