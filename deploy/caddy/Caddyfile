@@ -13,19 +13,25 @@ claude-phone.pl:443 {
         protocols tls1.3
     }
 
-    # API endpoints — WebSocket upgrades, pass-through to gateway
-    @websocket {
+    # API endpoints — WebSocket upgrades, pass-through to gateway.
+    # `reverse_proxy` accepts a single matcher, so the path + Upgrade
+    # header conditions are folded into one named matcher per route
+    # rather than chained as `<path> <named-matcher>` (invalid syntax).
+    @wrapper_ws {
+        path /api/wrapper
         header Connection *Upgrade*
         header Upgrade websocket
     }
-
-    reverse_proxy /api/wrapper @websocket {
-        to 127.0.0.1:8080
+    reverse_proxy @wrapper_ws 127.0.0.1:8080 {
         flush_interval -1
     }
 
-    reverse_proxy /api/phone/* @websocket {
-        to 127.0.0.1:8080
+    @phone_ws {
+        path /api/phone/*
+        header Connection *Upgrade*
+        header Upgrade websocket
+    }
+    reverse_proxy @phone_ws 127.0.0.1:8080 {
         flush_interval -1
     }
 

@@ -90,6 +90,7 @@ if [ -z "${NOVEL}" ]; then
 fi
 
 echo "ct_monitor: NOVEL CERT SERIAL(S) detected for ${DOMAIN}:"
+# shellcheck disable=SC2086 # NOVEL is newline-separated serials; word-split is intentional so each prints on its own line.
 printf '  %s\n' ${NOVEL}
 mv "${NEW_FILE}" "${BASELINE}"
 exit 1

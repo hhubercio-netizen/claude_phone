@@ -53,7 +53,7 @@ cargo run --quiet -p claude-phone-gateway -- --config gateway-dev.toml \
 GATEWAY_PID=$!
 
 # Wait for gateway healthz to come up (up to ~30s — first build dominates).
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if curl -fs http://127.0.0.1:8080/healthz > /dev/null 2>&1; then
     break
   fi
@@ -74,7 +74,7 @@ WRAPPER_PID=$!
 
 # Wait for wrapper to print its RPC URL.
 RPC_URL=""
-for i in $(seq 1 60); do
+for _ in $(seq 1 60); do
   if grep -q "CLAUDE_PHONE_RPC_URL=" /tmp/claude-phone-wrapper.log 2>/dev/null; then
     RPC_URL="$(grep -oE 'CLAUDE_PHONE_RPC_URL=http://[^ ]+' /tmp/claude-phone-wrapper.log \
       | head -1 | cut -d= -f2)"

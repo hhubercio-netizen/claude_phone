@@ -46,6 +46,7 @@ grep -qF "cron: '0 6 * * *'" .github/workflows/ct-monitor.yml \
 echo "[security_invariants] post-deploy TLS verify wiring ..."
 [ -x deploy/scripts/post_deploy_verify.sh ] \
     || { echo "MISSING executable deploy/scripts/post_deploy_verify.sh — TM-TLS.6/.7"; exit 1; }
+# shellcheck disable=SC2016 # `-F` is fixed-string grep; the single-quoted token is the literal we expect deploy.sh to contain verbatim.
 grep -qF 'STRICT=1 bash "$REPO_DIR/deploy/scripts/post_deploy_verify.sh"' deploy/scripts/deploy.sh \
     || { echo "MISSING STRICT=1 invocation of post_deploy_verify.sh in deploy.sh — TM-TLS.6/.7"; exit 1; }
 
