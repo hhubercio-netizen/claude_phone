@@ -316,3 +316,83 @@ async fn chaos_random_wrapper_drops_do_not_leak_slots() {
         }
     }
 }
+
+// =====================================================================
+// Test 4 — structural pin (TM-TEST.5 forward-looking grep style) for
+// the ServerHello-send-fail teardown in `phone_ws::handle_phone_ws`.
+//
+// Pre-fix P1-1 bug: the branch taken when `socket.send(ServerHello)`
+// returned `Err` was a bare `return` with no detach. `attach_phone`
+// had already flipped the slot to `Attached`, and the `TM-AUTH.11`
+// sweeper SKIPS attached sessions, so a dead phone here pinned the
+// `to_phone` slot for the entire lifetime of the wrapper — every
+// future phone re-attach with the same token was rejected with
+// `SessionTaken` (mapped on the wire to coarse `InvalidToken` /
+// "no such session" by TM-AUTH.7).
+//
+// Why a *structural* test and not a runtime one: triggering an actual
+// `socket.send(ServerHello)` failure deterministically is hostile to
+// loopback timing. The bug branch is only reached when a TCP RST from
+// the peer races into the gateway between `recv_phone_hello` returning
+// `Ok` and the next write completing — a microsecond-wide window on
+// localhost. On the success path the gateway proceeds to spawn the
+// bridging tasks; the dead read then fires the shared `session.cancel`
+// (TM-RATE.7), the wrapper's `handle_wrapper` joins and calls
+// `registry.remove`, and a second phone attempt fails with
+// `SessionNotFound` — identical wire body to the bug. The two failure
+// modes are indistinguishable from the outside, so a runtime test
+// cannot pin which one fired. The structural test below precisely
+// pins the cleanup pattern in the source instead, which is exactly the
+// shape of bug we want to catch (a future regression that drops the
+// teardown from this branch).
+//
+// Forward-looking invariant: the ServerHello-send-fail branch MUST
+// detach the slot and reset the idle clock before returning. If
+// either call is removed — or if a new early-return is added in this
+// function after `attach_phone` succeeded without the same teardown —
+// this test fails.
+// =====================================================================
+#[test]
+fn phone_ws_server_hello_failure_branch_runs_slot_teardown() {
+    const PHONE_WS_SOURCE: &str = include_str!("../src/routes/phone_ws.rs");
+
+    // Anchor on the comment that pins the ServerHello-send branch. The
+    // comment doubles as a stable marker because TM-CODE.3 is a
+    // workspace-wide audit row used to label infallible `expect(...)`
+    // sites — any rename here would already trip the TM-CODE.3 grep
+    // gates, so anchoring on it is no worse than anchoring on the
+    // function signature itself.
+    const MARKER: &str = "// TM-CODE.3: ServerHello is a derive(Serialize) struct — infallible.";
+    let start = PHONE_WS_SOURCE
+        .find(MARKER)
+        .expect("ServerHello-send branch marker present in routes/phone_ws.rs");
+
+    // Slice from the marker to the next `return;` — that bounded
+    // window is the bug-prone branch body. Anything outside this slice
+    // is unrelated cleanup.
+    let return_off = PHONE_WS_SOURCE[start..]
+        .find("return;")
+        .expect("expected `return;` inside the ServerHello-send branch");
+    let branch_body = &PHONE_WS_SOURCE[start..start + return_off];
+
+    assert!(
+        branch_body.contains("slot.detach()"),
+        "TM-TEST.6 (P1-1 regression): the ServerHello-send-fail branch \
+         in `routes/phone_ws.rs` MUST call `slot.detach()` before \
+         `return;`. A bare return leaves the to_phone slot in Attached \
+         state with a dead phone; the TM-AUTH.11 sweeper skips Attached \
+         sessions, so the slot is pinned until wrapper exit and every \
+         subsequent re-attach with the same token fails with \
+         SessionTaken. Mirror the auth-failure branch teardown.\n\n\
+         Branch body inspected:\n---\n{branch_body}\n---"
+    );
+    assert!(
+        branch_body.contains("touch_phone()"),
+        "TM-TEST.6 (P1-1 regression): the ServerHello-send-fail branch \
+         in `routes/phone_ws.rs` MUST call `handle.session.touch_phone()` \
+         before `return;`. Skipping it leaves the session's idle clock \
+         stale relative to when the phone actually went away, distorting \
+         the TM-AUTH.11 sweep window. Mirror the auth-failure branch \
+         teardown.\n\nBranch body inspected:\n---\n{branch_body}\n---"
+    );
+}

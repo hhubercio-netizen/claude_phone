@@ -230,6 +230,18 @@ async fn handle_socket(
         .await
         .is_err()
     {
+        // TM-TEST.6 — phone disconnected between `recv_phone_hello`
+        // returning Ok and this write succeeding (typical cause: RST
+        // race). `attach_phone` already flipped the slot to Attached,
+        // and the TM-AUTH.11 sweeper skips Attached sessions, so a
+        // bare `return` here would pin the slot to a dead phone until
+        // wrapper exit. Mirror the auth-failure branch teardown.
+        // `peer_up` is the next message and was never sent, so we
+        // owe the wrapper no `peer_down`.
+        let mut slot = handle.session.to_phone.lock().await;
+        slot.detach();
+        drop(slot);
+        handle.session.touch_phone().await;
         return;
     }
 
