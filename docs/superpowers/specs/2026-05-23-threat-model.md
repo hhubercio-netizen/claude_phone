@@ -628,10 +628,10 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-INPUT.2 | Strip OSC 8 (hyperlinks) in gateway phone→wrapper direction                                  | GREEN (same sanitizer drops every OSC, OSC 8 included; CSI / SS3 / bracketed-paste preserved by allow-list) |
 | TM-INPUT.3 | Reject DCS/APC/PM/SOS in gateway phone→wrapper direction                                     | GREEN (sanitizer also strips `ESC P` DCS, `ESC _` APC, `ESC ^` PM, `ESC X` SOS; truncated sequences drop the remainder so a half-built OSC cannot leak into the PTY) |
 | TM-INPUT.4 | Audit xterm.js CSI/DCS handlers; disable OSC 52, OSC 8 client-side                           | TODO   |
-| TM-INPUT.5 | `serde_json::Deserializer::set_max_recursion` on all WS JSON parsing                         | TODO   |
-| TM-INPUT.6 | Path traversal: tower-http ServeDir reject `..` (verify via test)                            | TODO   |
-| TM-INPUT.7 | Control-character sanitization on session token from URL                                     | TODO   |
-| TM-INPUT.8 | Wrapper CLI `--claude-bin` arg validation (block path traversal)                             | TODO   |
+| TM-INPUT.5 | `serde_json::Deserializer::set_max_recursion` on all WS JSON parsing                         | GREEN (`protocol.rs` module doc pins the serde_json default 128-level cap as the wire-contract invariant; forward-looking tests `rejects_deeply_nested_json` + `rejects_deeply_nested_control_message` break if anyone enables `unbounded_depth` or swaps the parser) |
+| TM-INPUT.6 | Path traversal: tower-http ServeDir reject `..` (verify via test)                            | GREEN (`http.rs` ServeDir annotated; `tests/path_traversal_test.rs` drives 4 raw-TCP cases covering `..`, `%2e%2e`, double-slash, and a legit-asset sanity check; the fixture plants an "outside-assets" canary so the assertions also prove no leak) |
+| TM-INPUT.7 | Control-character sanitization on session token from URL                                     | GREEN (`is_base64url_byte` in `token.rs` annotated; `#[cfg(test)] mod tests` covers NUL/BEL/ESC/DEL/slash/backslash/high-bit on both SessionToken and ApiKey; gateway `tests/token_charset_test.rs` drives raw-TCP `/api/phone/<43-byte-with-control-char>` and asserts no 101/200) |
+| TM-INPUT.8 | Wrapper CLI `--claude-bin` arg validation (block path traversal)                             | GREEN (`cli.rs::CliError` + `Cli::validate` rejects empty + any C0/DEL byte; `main.rs` switches to `Cli::parse_validated`; `tests/cli_validation_test.rs` covers empty, NUL, newline, tab, DEL, plus deliberate-accept cases for normal/`..`-relative paths) |
 
 ### Rate limiting / DoS (TM-RATE)
 
