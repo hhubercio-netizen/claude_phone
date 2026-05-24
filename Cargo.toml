@@ -72,6 +72,10 @@ tokio-test = "0.4"
 portpicker = "0.1"
 tempfile = "3"
 tracing-test = "0.2"
+# TM-TEST.2 — property-based tests over the wire protocol and secret-token
+# parsers. Pinned to a single workspace version so the proptest binary,
+# regression-corpus format, and proc-macro stay in lockstep across crates.
+proptest = "1.5"
 
 # secrets handling
 subtle = "2"

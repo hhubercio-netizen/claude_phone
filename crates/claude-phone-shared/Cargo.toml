@@ -16,3 +16,6 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# TM-TEST.2 — property-based tests for the wire protocol and secret-token
+# parsing. Dev-only so it never lands in any production binary.
+proptest = { workspace = true }
