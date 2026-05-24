@@ -698,7 +698,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 |-------------|---------------------------------------------------------------------------------------------|--------|
 | TM-FRONT.1  | CSP nonce-based `style-src` (replace `'unsafe-inline'`)                                     | DEFER (P2) |
 | TM-FRONT.2  | Trusted Types policy (require-trusted-types-for 'script')                                   | DEFER (P2) |
-| TM-FRONT.3  | `history.replaceState()` to strip token from URL bar after first load                       | TODO   |
+| TM-FRONT.3  | `history.replaceState()` to strip token from URL bar after first load                       | GREEN (`SessionPage.tsx` captures `params.token` into local state on first render and a single-shot `useEffect` calls `window.history.replaceState({}, '', '/')`; `tests/SessionPage.test.tsx` spies on `replaceState` and asserts both that it fires and that no call carries the token in the replacement URL; the WS-stays-alive test pins that the URL swap does not break the live session) |
 | TM-FRONT.4  | Service worker minimal scope (`/`), explicit bypass for `/api/*`, `/s/<token>`              | VERIFY |
 | TM-FRONT.5  | localStorage / sessionStorage / history-state enforcement (no token persisted)              | GREEN  |
 | TM-FRONT.6  | CSP `default-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, `script-src 'self'` | GREEN |

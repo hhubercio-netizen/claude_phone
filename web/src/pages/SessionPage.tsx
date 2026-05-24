@@ -31,7 +31,13 @@ function gatewayWsUrl(token: string): string {
 }
 
 export function SessionPage() {
-  const { token } = useParams<{ token: string }>();
+  const params = useParams<{ token: string }>();
+  // Capture on first render so the rest of the component sees a stable value
+  // even after `useEffect` below strips the visible URL via `replaceState`.
+  // React Router tracks navigation via popstate (which replaceState does not
+  // fire), so `params.token` would also stay stable in practice — but local
+  // state makes the contract explicit and survives any future router change.
+  const [token] = useState(() => params.token);
   const setPeer = useSessionStore((s) => s.setPeerConnected);
   const setServerSessionId = useSessionStore((s) => s.setServerSessionId);
 
@@ -48,6 +54,19 @@ export function SessionPage() {
   // Hold the screen on while a valid session page is mounted. The hook is a
   // no-op on browsers without the Wake Lock API.
   useWakeLock(tokenValid);
+
+  // TM-FRONT.3: the session token is a bearer-equivalent secret and the URL
+  // bar leaks via screen-share thumbnails, browser sync, OS-level URL
+  // completion caches, share sheets, and the back-history dropdown — surfaces
+  // that Referrer-Policy (TM-TLS.5) and storage hygiene (TM-FRONT.5) cannot
+  // reach. Strip to `/` after the first render. `replaceState` does NOT fire
+  // popstate, so React Router stays bound to /s/:token internally; the
+  // captured `token` above keeps driving the session. On reload the user
+  // lands at `/` — a deliberate trade-off, since a bookmark of /s/<token>
+  // would carry the token forever and undermine the entire mitigation.
+  useEffect(() => {
+    window.history.replaceState({}, '', '/');
+  }, []);
 
   // Send phone_hello after EVERY open — the reconnecting hook re-opens the WS
   // on backoff after network blips, and the gateway expects phone_hello to be

@@ -269,6 +269,38 @@ describe('SessionPage', () => {
     expect(Array.from(sent[1] as Uint8Array)).toEqual([0x32]);
   });
 
+  it('strips the token from the URL bar after first render (TM-FRONT.3)', () => {
+    // TM-FRONT.3 forward-looking. The token is a bearer-equivalent secret;
+    // leaving it in the URL bar exposes it to screen-share thumbnails,
+    // browser sync, share sheets, OS-level URL caches, and the back-history
+    // dropdown. A regression that removes the `replaceState` call, or
+    // smuggles the token into the replacement URL (e.g. `/?session=<token>`
+    // or `/s/<token>?stripped=1`), must fail this test.
+    const spy = vi.spyOn(window.history, 'replaceState');
+    renderAt(`/s/${VALID_TOKEN}`);
+    expect(spy).toHaveBeenCalled();
+    for (const call of spy.mock.calls) {
+      // call.args = [state, unused, url?]. The url is the load-bearing arg.
+      const newUrl = call[2];
+      if (newUrl != null) {
+        expect(String(newUrl)).not.toContain(VALID_TOKEN);
+      }
+    }
+    spy.mockRestore();
+  });
+
+  it('keeps the WebSocket session alive after stripping the URL (TM-FRONT.3)', () => {
+    // Belt-and-braces: the URL-bar swap must NOT tear down the WebSocket. A
+    // future change that accidentally re-read `useParams` after replaceState
+    // — and got `undefined` because React Router could not resolve `:token`
+    // against the new `/` path — would silently break the session. The
+    // captured-token-in-local-state design defends against this; this test
+    // pins the property end-to-end.
+    renderAt(`/s/${VALID_TOKEN}`);
+    expect(MockWebSocket.instances.length).toBe(1);
+    expect(MockWebSocket.last()!.url).toContain(`/api/phone/${VALID_TOKEN}`);
+  });
+
   it('does not leak the token via document.title, localStorage, or sessionStorage', () => {
     renderAt(`/s/${VALID_TOKEN}`);
     act(() => {
