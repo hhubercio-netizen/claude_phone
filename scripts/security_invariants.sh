@@ -155,4 +155,32 @@ done
 grep -qF 'install_journald' deploy/scripts/deploy.sh \
     || { echo "MISSING install_journald wiring in deploy.sh — TM-INFRA.9"; exit 1; }
 
+# TM-INFRA.7 — Cloudflare WAF rule documentation. Operator-applied, not
+# automated (see deploy/cloudflare/README.md for the reason). The check
+# is doc-presence + the three rule names — if the runbook drifts away
+# from the contract the gate trips, forcing a docs review.
+echo "[security_invariants] Cloudflare WAF runbook (TM-INFRA.7) ..."
+CF_README=deploy/cloudflare/README.md
+for marker in \
+    "Custom WAF rules (TM-INFRA.7)" \
+    "block-scan-paths" \
+    "block-unknown-api" \
+    "rate-wrapper"
+do
+    grep -qF "${marker}" "${CF_README}" \
+        || { echo "MISSING in ${CF_README}: ${marker} — TM-INFRA.7"; exit 1; }
+done
+
+# TM-INFRA.10 — loopback-only binding check must remain wired into
+# post_deploy_verify.sh. A refactor that drops the block would silently
+# stop catching bind_addr regressions on every future deploy.
+echo "[security_invariants] post-deploy loopback binding check (TM-INFRA.10) ..."
+grep -qF 'TM-INFRA.10' deploy/scripts/post_deploy_verify.sh \
+    || { echo "MISSING TM-INFRA.10 binding block in post_deploy_verify.sh"; exit 1; }
+grep -qE 'ss -tlnp.*claude-phone-gateway|grep -F claude-phone-gateway' \
+        deploy/scripts/post_deploy_verify.sh \
+    || { echo "MISSING ss -tlnp claude-phone-gateway probe — TM-INFRA.10"; exit 1; }
+grep -qE '127\\.0\\.0\\.1:|\\[::1\\]:' deploy/scripts/post_deploy_verify.sh \
+    || { echo "MISSING loopback pattern in post_deploy_verify.sh — TM-INFRA.10"; exit 1; }
+
 echo "[security_invariants] OK"

@@ -50,6 +50,36 @@ require() {
 require curl
 require openssl
 
+# --- TM-INFRA.10: gateway binds only to loopback -------------------------
+#
+# Runs first because it's host-local — does not need the public HTTPS
+# surface to be up. A non-loopback bind is a critical configuration
+# regression (e.g., bind_addr = "0.0.0.0:8080" typo would expose the
+# gateway directly, bypassing Caddy TLS and the auth surface review).
+#
+# ss -tlnp output for the gateway looks like:
+#   LISTEN 0  128  127.0.0.1:8080  0.0.0.0:*  users:(("claude-phone-g",pid=...))
+#
+# Soft-skip when ss is unavailable (probing from outside the deploy host)
+# or when the gateway isn't visible (e.g., running in a different netns).
+
+echo "[post_deploy] TM-INFRA.10 — gateway loopback binding"
+if ! command -v ss >/dev/null; then
+    soft_fail "ss(8) unavailable — TM-INFRA.10 binding check skipped (install iproute2)"
+else
+    binding=$(ss -tlnp 2>/dev/null \
+        | grep -F claude-phone-gateway \
+        | awk '{print $4}' \
+        | head -n1 || true)
+    if [ -z "${binding}" ]; then
+        soft_fail "claude-phone-gateway not visible in ss -tlnp — TM-INFRA.10 not exercised"
+    elif [[ "${binding}" =~ ^127\.0\.0\.1: ]] || [[ "${binding}" =~ ^\[::1\]: ]]; then
+        echo "  OK: gateway bound to loopback only (${binding})"
+    else
+        soft_fail "gateway bound to non-loopback: ${binding} — TM-INFRA.10 regression (check gateway.toml bind_addr)"
+    fi
+fi
+
 # --- Reachability gate ----------------------------------------------------
 
 if ! curl -sf --max-time 10 "https://${DOMAIN}/healthz" >/dev/null; then
