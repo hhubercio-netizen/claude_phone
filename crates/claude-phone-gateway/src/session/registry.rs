@@ -91,9 +91,17 @@ impl SessionRegistry {
         let replayed = {
             let mut slot = session.to_phone.lock().await;
             if slot.is_attached() {
-                // A phone is already attached. Refuse the new one rather than
-                // silently stealing the session — prevents takeover by anyone
-                // who knows the token while the original holder is connected.
+                // TM-AUTH.3: single-phone-per-session is the D1 default — a
+                // second concurrent phone attempt is REFUSED, NOT kicked
+                // through. The asymmetric choice matters: kick-previous would
+                // let anyone who learned the token (shoulder-surf, screen-
+                // share leak, browser history sync) silently boot the
+                // legitimate user and impersonate them. Refuse-second means
+                // the worst an attacker with a stolen token can do is
+                // generate noise — they cannot displace the live operator.
+                // The reattach-after-detach path is intentionally separate
+                // (`detach_then_reattach_after_disconnect` test) so a real
+                // user reconnect after network loss still works.
                 return Err(GatewayError::SessionTaken);
             }
             slot.attach_and_replay(tx_to_phone)

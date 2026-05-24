@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use std::time::Duration;
 
+use claude_phone_gateway::error::GatewayError;
 use claude_phone_gateway::session::{Frame, SessionRegistry};
 use claude_phone_shared::SessionToken;
 
@@ -51,16 +53,82 @@ async fn attach_phone_to_missing_session() {
 
 #[tokio::test]
 async fn second_phone_attach_while_first_attached_fails() {
-    // Sticky session is per-token, but only one phone can hold it at a time.
-    // A second concurrent phone trying the same link is rejected so a token
-    // leak doesn't let an attacker steal an active session.
+    // TM-AUTH.3 forward-looking. Sticky session is per-token, but only one
+    // phone can hold it at a time. A second concurrent phone trying the same
+    // link is rejected so a token leak doesn't let an attacker steal an
+    // active session. The exact error variant is asserted (not just any Err)
+    // so a future refactor that returns `SessionNotFound` or `InvalidToken`
+    // would break the test — the response status differs (404 vs 409) and
+    // would change observable client behaviour.
     let reg = SessionRegistry::new(10);
     let token = SessionToken::generate();
     let _w = reg.register_wrapper(token.clone()).await.unwrap();
     let _first = reg.attach_phone(&token).await.unwrap();
 
     let second = reg.attach_phone(&token).await;
-    assert!(second.is_err(), "second concurrent phone must be rejected");
+    // `PhoneHandle` does not derive `Debug`, so describe rather than format
+    // the value when the match fails.
+    let variant = match &second {
+        Ok(_) => "Ok(_)".to_string(),
+        Err(e) => format!("Err({e:?})"),
+    };
+    assert!(
+        matches!(second, Err(GatewayError::SessionTaken)),
+        "second phone must yield exactly GatewayError::SessionTaken, got {variant}",
+    );
+}
+
+#[tokio::test]
+async fn concurrent_phone_attaches_only_one_wins() {
+    // TM-AUTH.3 forward-looking. Even when two attach attempts race in
+    // parallel BEFORE either holds the to_phone slot, the registry's
+    // serialization (mutex on to_phone) must guarantee exactly one Ok and
+    // exactly one SessionTaken. A regression that drops the mutex - e.g.
+    // converting the slot to a lock-free atomic without compare-exchange
+    // semantics - could let both attaches succeed and double-deliver
+    // wrapper output to two phones; or both fail and brick the session.
+    let reg = Arc::new(SessionRegistry::new(10));
+    let token = SessionToken::generate();
+    let _w = reg.register_wrapper(token.clone()).await.unwrap();
+
+    let r1 = Arc::clone(&reg);
+    let r2 = Arc::clone(&reg);
+    let t1 = token.clone();
+    let t2 = token.clone();
+    let (a, b) = tokio::join!(
+        tokio::spawn(async move { r1.attach_phone(&t1).await }),
+        tokio::spawn(async move { r2.attach_phone(&t2).await }),
+    );
+    let a = a.expect("task a panicked");
+    let b = b.expect("task b panicked");
+
+    let oks = [&a, &b].iter().filter(|r| r.is_ok()).count();
+    let taken = [&a, &b]
+        .iter()
+        .filter(|r| matches!(r, Err(GatewayError::SessionTaken)))
+        .count();
+    // `PhoneHandle` does not derive `Debug`, so describe outcomes by variant.
+    let describe = |r: &Result<_, GatewayError>| -> &'static str {
+        match r {
+            Ok(_) => "Ok",
+            Err(GatewayError::SessionTaken) => "Err(SessionTaken)",
+            Err(_) => "Err(other)",
+        }
+    };
+    assert_eq!(
+        oks,
+        1,
+        "exactly one attach must win — a={} b={}",
+        describe(&a),
+        describe(&b),
+    );
+    assert_eq!(
+        taken,
+        1,
+        "the loser must be SessionTaken specifically — a={} b={}",
+        describe(&a),
+        describe(&b),
+    );
 }
 
 #[tokio::test]
