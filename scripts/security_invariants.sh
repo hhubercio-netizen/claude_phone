@@ -135,4 +135,24 @@ done
 grep -qF 'install_auditd' deploy/scripts/deploy.sh \
     || { echo "MISSING install_auditd wiring in deploy.sh — TM-INFRA.5"; exit 1; }
 
+# TM-INFRA.9 — journald persistence + size caps + syslog forwarding.
+# Presence-only here; live verification (Storage=persistent active
+# after restart) is post_deploy_verify.sh's job on the deploy host.
+echo "[security_invariants] journald persistence drop-in ..."
+JOURNALD_DROPIN=deploy/journald/99-claude-phone.conf
+[ -f "${JOURNALD_DROPIN}" ] \
+    || { echo "MISSING ${JOURNALD_DROPIN} — TM-INFRA.9"; exit 1; }
+for directive in \
+    "^Storage=persistent" \
+    "^SystemMaxUse=512M" \
+    "^SystemKeepFree=2G" \
+    "^MaxRetentionSec=30day" \
+    "^ForwardToSyslog=yes"
+do
+    grep -qE "${directive}" "${JOURNALD_DROPIN}" \
+        || { echo "MISSING in ${JOURNALD_DROPIN}: ${directive} — TM-INFRA.9"; exit 1; }
+done
+grep -qF 'install_journald' deploy/scripts/deploy.sh \
+    || { echo "MISSING install_journald wiring in deploy.sh — TM-INFRA.9"; exit 1; }
+
 echo "[security_invariants] OK"

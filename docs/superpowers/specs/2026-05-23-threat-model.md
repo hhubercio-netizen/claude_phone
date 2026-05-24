@@ -688,7 +688,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-INFRA.6  | systemd LimitNOFILE, MemoryMax, CPUQuota                                                    | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitNOFILE=8192`, `MemoryMax=256M`, `CPUQuota=80%`) |
 | TM-INFRA.7  | Cloudflare WAF rules (Free tier): block common-scan paths (/.git, /.env, /wp-admin)         | TODO   |
 | TM-INFRA.8  | systemd LimitCORE=0 (no core dumps)                                                         | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitCORE=0`) |
-| TM-INFRA.9  | systemd journal persistence; ReadWritePaths=/var/lib/claude-phone                           | TODO   |
+| TM-INFRA.9  | systemd journal persistence; ReadWritePaths=/var/lib/claude-phone                           | GREEN (`deploy/journald/99-claude-phone.conf` drop-in: `Storage=persistent`, `SystemMaxUse=512M`, `SystemKeepFree=2G`, `MaxRetentionSec=30day`, `ForwardToSyslog=yes`; installed by `deploy.sh::install_journald` which also creates `/var/log/journal` and restarts `systemd-journald`; `ReadWritePaths=/var/lib/claude-phone` already on the unit since TM-INFRA.1) |
 | TM-INFRA.10 | Caddy ↔ Gateway on 127.0.0.1 loopback only (kernel-enforced)                                | VERIFY |
 | TM-INFRA.11 | `claude-phone` user non-root, no shell, owned dirs read-only via systemd ReadOnlyPaths      | GREEN (`deploy.sh` creates `claude-phone` user with `/sbin/nologin`; `deploy/systemd/claude-phone-gateway.service` adds `ReadOnlyPaths=/opt/claude-phone`) |
 

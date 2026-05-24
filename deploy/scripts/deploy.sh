@@ -124,6 +124,17 @@ install_auditd() {
     augenrules --load
 }
 
+# TM-INFRA.9 — journald persistence drop-in. Idempotent.
+# Restart journald so the drop-in takes effect; transient log lines
+# emitted in the gap between stop and start get flushed by systemd.
+install_journald() {
+    install -d -m 0755 /etc/systemd/journald.conf.d
+    install -m 0644 "$REPO_DIR/deploy/journald/99-claude-phone.conf" \
+        /etc/systemd/journald.conf.d/99-claude-phone.conf
+    install -d -m 2755 /var/log/journal
+    systemctl restart systemd-journald
+}
+
 start_services() {
     systemctl enable --now claude-phone-gateway
     systemctl restart caddy 2>/dev/null || true
@@ -139,6 +150,7 @@ install_caddy_note
 install_sshd_dropin
 install_fail2ban
 install_auditd
+install_journald
 start_services
 
 systemctl status --no-pager claude-phone-gateway || true
