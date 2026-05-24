@@ -19,6 +19,9 @@ use crate::session::SessionRegistry;
 
 /// Redact session tokens from a path so they never appear in logs.
 /// Tokens live in `/s/<token>` and `/api/phone/<token>`.
+// TM-AUTH.10: every tracing span on the HTTP layer goes through this so the
+// raw `/s/<token>` and `/api/phone/<token>` paths are replaced with the
+// `<redacted>` placeholder before they hit any sink (stdout, JSON, file).
 pub(crate) fn redact_path(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("/s/") {
         let tail = rest.find('/').map(|i| &rest[i..]).unwrap_or("");
@@ -39,6 +42,10 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
     // session whose phone has been gone for >= session_idle_timeout_secs.
     // Sweep interval is min(60s, timeout/4) so short timeouts (tests, dev)
     // still get acted on promptly.
+    // TM-AUTH.11: sweep interval bound = min(60s, timeout/4). A 7-day default
+    // timeout sweeps once a minute; tests with sub-minute timeouts sweep at
+    // timeout/4 so a forgotten phone session can never linger past 1.25×
+    // its declared idle ceiling.
     let idle_timeout = std::time::Duration::from_secs(config.session_idle_timeout_secs);
     let sweep_interval = std::cmp::min(
         std::time::Duration::from_secs(60),
@@ -98,6 +105,11 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
     // differs from https. If you ever serve from a different host for the
     // WS endpoint, add `wss://<host>` explicitly here.
     let security_headers = tower::ServiceBuilder::new()
+        // TM-FRONT.6: Content-Security-Policy locked to same-origin assets.
+        // `default-src 'self'` + an empty `object-src 'none'` block plugin
+        // surfaces; `frame-ancestors 'none'` denies framing; `base-uri`
+        // and `form-action` are pinned so an XSS cannot rewrite the base
+        // URL or post forms cross-origin.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("content-security-policy"),
             HeaderValue::from_static(
@@ -127,20 +139,32 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
             header::REFERRER_POLICY,
             HeaderValue::from_static("no-referrer"),
         ))
+        // TM-FRONT.8: X-Frame-Options DENY. Belt-and-suspenders alongside
+        // the CSP `frame-ancestors 'none'` above; older clients honour the
+        // legacy header even when CSP support is partial.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-frame-options"),
             HeaderValue::from_static("DENY"),
         ))
+        // TM-FRONT.9: X-Content-Type-Options nosniff blocks MIME-sniffing,
+        // so an asset that ends up with a wrong Content-Type can never be
+        // executed as a different MIME (script / HTML).
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("x-content-type-options"),
             HeaderValue::from_static("nosniff"),
         ))
+        // TM-FRONT.7: Permissions-Policy disables geolocation, microphone,
+        // and camera. The site has no use for any of them; an XSS therefore
+        // cannot prompt the user for permission either.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("permissions-policy"),
             HeaderValue::from_static("geolocation=(), microphone=(), camera=()"),
         ))
         // Hide the server name. Tower-http's default trace gives us all the
         // diagnostics we need; advertising "axum" to clients adds nothing.
+        // TM-SECRET.4: hidden server header — never advertise framework or
+        // version to scanners; the literal "claude-phone" is fixed so a
+        // refactor cannot regress it to `axum/0.7.x` or similar.
         .layer(SetResponseHeaderLayer::overriding(
             HeaderName::from_static("server"),
             HeaderValue::from_static("claude-phone"),

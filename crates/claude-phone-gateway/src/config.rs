@@ -13,6 +13,11 @@ pub struct GatewayConfig {
     /// secret values (`[ApiKey(***), ...]`) instead of leaking them into
     /// logs. TOML deserialization runs through `ApiKey::TryFrom<String>`
     /// so malformed entries are rejected at load time.
+    ///
+    /// TM-SECRET.12: gateway-dev.toml ships a deliberately too-short
+    /// placeholder; `ApiKey::TryFrom<String>` rejects it on parse, so a
+    /// gateway accidentally pointed at the dev config fails to start
+    /// instead of silently accepting an attacker-known key.
     pub api_keys: Vec<ApiKey>,
     #[serde(default = "default_session_timeout")]
     pub session_idle_timeout_secs: u64,

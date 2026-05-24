@@ -309,6 +309,10 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
     });
 
     let _ = tokio::join!(outgoing_task, incoming_task);
+    // TM-AUTH.5: token forgotten on wrapper exit. Once both halves of the
+    // wrapper WS finish, the registry entry is removed unconditionally — a
+    // dropped wrapper means the session is dead even if its idle timer has
+    // not elapsed.
     state.registry.remove(&token);
     tracing::info!(session_id = %session_id, "wrapper detached");
 }

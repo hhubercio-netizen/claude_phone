@@ -120,6 +120,9 @@ impl SessionRegistry {
 
     /// Drop a session by token and fire its `cancel` so any wrapper/phone WS
     /// tasks bound to it tear down. Idempotent.
+    // TM-AUTH.5: forgetting a token is unconditional — remove the entry then
+    // cancel any task still bound to it. The sweeper (TM-AUTH.11) and the
+    // wrapper-exit path both funnel through here.
     pub async fn drop_session(&self, token: &SessionToken) {
         if let Some((_, session)) = self.inner.remove(token.as_str()) {
             // TM-CODE.4: keep active_count in sync with inner. Only decrement

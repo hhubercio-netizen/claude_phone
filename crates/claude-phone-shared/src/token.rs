@@ -97,6 +97,9 @@ macro_rules! define_secret_token {
             }
         }
 
+        // TM-SECRET.3: manual Debug prints the type label and "(***)" instead
+        // of the inner secret. Never derive Debug on these types — auto-derive
+        // would print the wrapped `Zeroizing<String>` verbatim.
         impl std::fmt::Debug for $name {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
                 write!(f, concat!($debug_label, "(***)"))

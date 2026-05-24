@@ -40,8 +40,17 @@ jobs:
         run: bash scripts/check_debug_derive_secrets.sh
       # TM-LEAK.3 — assert WS guards stay symmetric across phone/wrapper
       # routes, or have an explicit asymmetric carveout in the sweep script.
-      - name: TM-LEAK.3 — asymmetric WS guards
+      # The aggregator also runs the TM-LEAK.4 bidirectional coverage gate
+      # and the TM-SUPPLY.2 lockfile presence check (see security_invariants.sh).
+      - name: TM-LEAK.3 — asymmetric WS guards (+ TM-LEAK.4 / TM-SUPPLY.2)
         run: bash scripts/security_invariants.sh
+      # TM-LEAK.4 — explicit job-level label so a coverage-gate failure is
+      # recognisable in the CI checks list without expanding the security
+      # invariants step. The script is also wired into security_invariants.sh
+      # for local-dev `bash scripts/security_invariants.sh` runs; running it
+      # twice in CI is cheap (sub-second) and the duplicate is intentional.
+      - name: TM-LEAK.4 — TM-to-code coverage matrix
+        run: bash scripts/tm_coverage.sh
 
   cargo-audit:
     name: cargo audit

@@ -17,6 +17,10 @@ beforeEach(() => {
   });
 });
 
+// TM-FRONT.5: forward-looking tests asserting the session token never lands
+// in localStorage, sessionStorage, or window.history.state. A future change
+// that introduces a "remember session" toggle would have to remove or weaken
+// one of these tests, surfacing the trade-off in code review.
 describe('secret leakage', () => {
   it('session store does not persist token to localStorage', () => {
     useSessionStore.getState().setToken(TOKEN);

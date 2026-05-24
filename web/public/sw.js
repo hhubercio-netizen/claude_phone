@@ -46,6 +46,11 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// TM-FRONT.4: service worker scope is the root, but token-bearing and
+// dynamic paths are explicitly excluded below. The SW MUST never cache
+// `/api/*` (gateway WS upgrade + RPC) or `/s/<token>` (session shell with
+// the secret in the path); doing so would persist the bearer onto disk
+// inside the browser's CacheStorage.
 function isCacheable(url) {
   // Only cache GETs on our own origin.
   if (url.origin !== self.location.origin) return false;

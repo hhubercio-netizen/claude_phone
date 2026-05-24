@@ -10,6 +10,14 @@
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      TM-FRONT.10: this file is the only HTML shell the site emits. The single
+      script tag below references a same-origin Vite entry point — there are
+      ZERO third-party `<script src>` references in production output, so no
+      SRI hashes are required. Any future regression that adds a cross-origin
+      script will need to remove this comment and add the corresponding
+      `integrity="sha384-..."` attribute.
+    -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

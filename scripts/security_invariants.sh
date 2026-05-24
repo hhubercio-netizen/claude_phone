@@ -17,6 +17,22 @@ cd "$(dirname "$0")/.."
 echo "[security_invariants] asymmetric WS guard sweep ..."
 ./scripts/asymmetric_guards.sh
 
+# TM-SUPPLY.2 — Cargo.lock and package-lock.json must stay committed so
+# the toolchain pins reproducibly to specific dependency versions. A
+# refactor that gitignores either lockfile silently drops supply-chain
+# pinning, so this gate is presence-only on the tracked files.
+echo "[security_invariants] lockfile pinning (TM-SUPPLY.2) ..."
+[ -f Cargo.lock ] \
+    || { echo "MISSING Cargo.lock — TM-SUPPLY.2"; exit 1; }
+[ -f package-lock.json ] \
+    || { echo "MISSING package-lock.json — TM-SUPPLY.2"; exit 1; }
+
+# TM-LEAK.4 — bidirectional TM-ID coverage gate. Catches both directions:
+# catalog rows missing code references, and code comments referencing
+# IDs that no longer exist in the catalog (typos / stale renames).
+echo "[security_invariants] TM-LEAK.4 bidirectional coverage ..."
+./scripts/tm_coverage.sh
+
 # TM-TLS.4 — pin the CT-monitor cron line. Daily 06:00 UTC is what the
 # spec promises; a rename or accidental edit silently reduces coverage,
 # so the regression check is grep-on-the-literal-string.

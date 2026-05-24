@@ -46,6 +46,11 @@ async fn main() -> anyhow::Result<()> {
     // only callers that authenticate are descendants of this wrapper that
     // inherited the env (i.e. the `claude` PTY child and `claude-phone-pair`
     // invoked from inside it).
+    //
+    // TM-AUTH.8: ephemeral per startup — `ApiKey::generate()` produces a fresh
+    // 256-bit value, never reused across wrapper restarts.
+    // TM-AUTH.9: bearer never persisted — lives only in this process's memory
+    // and in the inherited child env. There is no on-disk write path.
     let rpc_auth = claude_phone_shared::ApiKey::generate();
 
     // Start the RPC server BEFORE spawning the PTY so we know the listening
@@ -139,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
                         // write it to wrapper.log in cleartext. We only confirm
                         // its presence; the URL itself is delivered to the user
                         // via the QR/pair output, not the log.
+                        // TM-SECRET.7: log a bool, never the public_url string.
                         let has_public_url = s.public_url.is_some();
                         drop(s);
                         tracing::info!(has_public_url, "pair triggered; connecting to gateway");
@@ -211,6 +217,7 @@ fn init_file_logging() -> anyhow::Result<std::path::PathBuf> {
     // a rotated file (deleted/recreated mid-process) keeps the same
     // restrictive permissions on Linux/macOS. Windows uses the default
     // user-profile ACL.
+    // TM-SECRET.14: 0o600 enforced on every open of wrapper.log.
     fn restricted_open(path: &std::path::Path) -> std::io::Result<std::fs::File> {
         let mut opts = std::fs::OpenOptions::new();
         opts.create(true).append(true);

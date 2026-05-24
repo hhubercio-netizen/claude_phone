@@ -29,6 +29,8 @@ pub struct PairResponse {
 /// `qr_ascii` block (the QR encodes the token URL — its bytes ARE the secret).
 /// Without this, `tracing::debug!(?response, ...)` anywhere on the wrapper
 /// side would write the bearer-equivalent token to wrapper.log.
+// TM-SECRET.5: PairResponse Debug is hand-written so all three secret-bearing
+// fields are redacted at the formatter boundary.
 impl std::fmt::Debug for PairResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PairResponse")
