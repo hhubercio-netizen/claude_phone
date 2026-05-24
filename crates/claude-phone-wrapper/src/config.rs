@@ -40,6 +40,25 @@ impl WrapperConfig {
     }
 
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        // Fail-loud on a world/group-readable config: the file holds a
+        // 256-bit shared secret with the gateway, and on a multi-user box
+        // (shared dev host, VPS with a second account, VS Code Server)
+        // any reader of the same UID could exfiltrate the api_key and
+        // impersonate this wrapper. On Windows we rely on the default
+        // user-profile ACL — Unix gets the explicit mode gate.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(path)?;
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                anyhow::bail!(
+                    "wrapper config {path:?} has permissive mode {mode:#o}; \
+                     contains api_key, must be group/world-unreadable. \
+                     Run: chmod 600 {path:?}"
+                );
+            }
+        }
         let raw = std::fs::read_to_string(path)?;
         let cfg: Self = toml::from_str(&raw)?;
         Ok(cfg)

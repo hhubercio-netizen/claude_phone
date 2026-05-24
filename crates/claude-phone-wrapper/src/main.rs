@@ -204,20 +204,30 @@ fn init_file_logging() -> anyhow::Result<std::path::PathBuf> {
         .unwrap_or_else(std::env::temp_dir);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating log dir {dir:?}"))?;
     let path = dir.join("wrapper.log");
+    // 0o600 (Unix) so a multi-user host can't read the wrapper log. The
+    // log carries peer IPs, RPC URL, error contexts — nothing as sensitive
+    // as the api_key, but enough to fingerprint a session. The same mode
+    // is applied to BOTH the probe open below and the writer factory so
+    // a rotated file (deleted/recreated mid-process) keeps the same
+    // restrictive permissions on Linux/macOS. Windows uses the default
+    // user-profile ACL.
+    fn restricted_open(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(path)
+    }
     // Probe-open so we surface permission errors before init() (which can
     // only print to stderr we are about to take over).
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-        .with_context(|| format!("opening log file {path:?}"))?;
+    restricted_open(&path).with_context(|| format!("opening log file {path:?}"))?;
     let path_for_writer = path.clone();
     tracing_subscriber::fmt()
         .with_writer(move || {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path_for_writer)
+            restricted_open(&path_for_writer)
                 // TM-CODE.3: this fires inside the tracing writer factory.
                 // If the log file can no longer be opened after daemonize
                 // (disk full, permissions revoked) the wrapper has lost its

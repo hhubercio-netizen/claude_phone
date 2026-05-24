@@ -9,6 +9,9 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    // Source maps disabled in prod: they exposed full TS sources under
+    // /assets/*.js.map, handing reverse-engineers identifier names and
+    // inline comments that describe the WS protocol shape.
+    sourcemap: false,
   },
 });
