@@ -3,6 +3,12 @@ use claude_phone_wrapper::cli::Cli;
 
 #[test]
 fn parses_minimum_args() {
+    // Clap reads `CLAUDE_PHONE_CLAUDE_BIN` / `CLAUDE_PHONE_WRAPPER_CONFIG`
+    // at parse time. A developer who has those set in their shell would
+    // otherwise see this test flake against the env-supplied value
+    // instead of the `default_value = "claude"` we want to pin here.
+    std::env::remove_var("CLAUDE_PHONE_CLAUDE_BIN");
+    std::env::remove_var("CLAUDE_PHONE_WRAPPER_CONFIG");
     let args = ["claude-phone"];
     let cli = Cli::try_parse_from(args).expect("default args parse");
     assert!(cli.config.is_none());
