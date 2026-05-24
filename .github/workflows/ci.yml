@@ -121,20 +121,22 @@ jobs:
   web:
     name: Web
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
+    # The frontend lives in `web/` but is an npm workspace member of the
+    # repo-root `package.json` (`"workspaces": ["web"]`). The lockfile is
+    # therefore at the repo root, not in `web/`, and `npm ci` MUST run
+    # from the root to install the workspace. The web-specific scripts
+    # are re-exported at the root as `lint:web` / `test:web` / `build:web`.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache-dependency-path: package-lock.json
       - run: npm ci
-      - run: npm run lint
-      - run: npm run test
-      - run: npm run build
+      - run: npm run lint:web
+      - run: npm run test:web
+      - run: npm run build:web
       # `npm audit` exits non-zero on high/critical advisories. We scope to
       # production deps; dev tooling (Vite plugins etc.) is allowed to lag.
       - run: npm audit --omit=dev --audit-level=high

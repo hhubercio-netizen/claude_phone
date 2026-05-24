@@ -11,6 +11,14 @@ export default [
   },
   js.configs.recommended,
   {
+    files: ['public/sw.js'],
+    languageOptions: {
+      globals: {
+        ...globals.serviceworker,
+      },
+    },
+  },
+  {
     files: ['**/*.{ts,tsx}'],
     languageOptions: {
       parser: tsParser,
@@ -31,6 +39,12 @@ export default [
       'react-refresh': reactRefresh,
     },
     rules: {
+      // typescript-eslint owns undefined-identifier checking via TS itself;
+      // core `no-undef` doesn't understand TS type namespaces (e.g.
+      // `React.ChangeEvent`) or DOM type aliases (e.g. `ResizeObserverCallback`)
+      // and emits false positives for them.
+      // https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-get-errors-telling-me-eslint-detected-undefined-variable
+      'no-undef': 'off',
       ...tsPlugin.configs.recommended.rules,
       ...reactHooks.configs.recommended.rules,
       'no-unused-vars': 'off',
