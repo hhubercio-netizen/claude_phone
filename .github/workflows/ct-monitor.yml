@@ -25,7 +25,7 @@ jobs:
     name: crt.sh diff for claude-phone.pl
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Restore CT baseline cache
         uses: actions/cache/restore@v4
