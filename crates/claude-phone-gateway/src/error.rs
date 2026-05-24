@@ -17,6 +17,17 @@ pub enum GatewayError {
     Io(#[from] std::io::Error),
 }
 
+// TM-SECRET.11: opaque error chain on the wire.
+//
+// 4xx variants emit their static `#[error(...)]` Display string — a
+// category, not internal state. The 5xx Internal/Io path deliberately
+// REPLACES the underlying error chain with the fixed literal
+// `"internal error"`; the real anyhow / io::Error context is sent to
+// the server log via `tracing::error!` and never reaches the client.
+// Without this asymmetry an unauthenticated probe could fingerprint the
+// gateway (file paths, OS errno strings, dependency stack traces) by
+// triggering errors. The forward-looking guard lives in
+// `tests/opaque_error_test.rs::*`.
 impl IntoResponse for GatewayError {
     fn into_response(self) -> Response {
         let (status, body) = match &self {
