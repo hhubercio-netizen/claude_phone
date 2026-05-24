@@ -674,7 +674,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-SUPPLY.2 | Cargo.lock + package-lock.json committed (lockfile pinning)                                 | GREEN  |
 | TM-SUPPLY.3 | Dependabot weekly for cargo + npm + github-actions                                          | GREEN  |
 | TM-SUPPLY.4 | `cargo-deny` config (licenses, advisories via cargo-audit, bans wildcards, sources allowlist) | GREEN  |
-| TM-SUPPLY.5 | Subresource Integrity (SRI) for any CDN assets — verify all self-hosted                     | VERIFY |
+| TM-SUPPLY.5 | Subresource Integrity (SRI) for any CDN assets — verify all self-hosted                     | GREEN (shared GREEN evidence with TM-FRONT.10: `web/tests/web-supply-and-sw.test.ts` asserts zero cross-origin `<script src>` and `<link href>` in `web/index.html` today, and demands `integrity` + `crossorigin` on any future external the team chooses to add) |
 
 ### Infrastructure (TM-INFRA)
 
@@ -699,13 +699,13 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-FRONT.1  | CSP nonce-based `style-src` (replace `'unsafe-inline'`)                                     | DEFER (P2) |
 | TM-FRONT.2  | Trusted Types policy (require-trusted-types-for 'script')                                   | DEFER (P2) |
 | TM-FRONT.3  | `history.replaceState()` to strip token from URL bar after first load                       | GREEN (`SessionPage.tsx` captures `params.token` into local state on first render and a single-shot `useEffect` calls `window.history.replaceState({}, '', '/')`; `tests/SessionPage.test.tsx` spies on `replaceState` and asserts both that it fires and that no call carries the token in the replacement URL; the WS-stays-alive test pins that the URL swap does not break the live session) |
-| TM-FRONT.4  | Service worker minimal scope (`/`), explicit bypass for `/api/*`, `/s/<token>`              | VERIFY |
+| TM-FRONT.4  | Service worker minimal scope (`/`), explicit bypass for `/api/*`, `/s/<token>`              | GREEN (`web/public/sw.js::isCacheable` rejects any URL whose origin differs from `self.location.origin`, any pathname starting with `/api/` or `/s/`, plus `/healthz`; navigation requests use network-first so a stale shell cannot re-render with deleted asset hashes; `web/tests/web-supply-and-sw.test.ts` pins both the source-string anchors AND extracts `isCacheable` via `new Function` to behavior-test the exclusions on real URLs) |
 | TM-FRONT.5  | localStorage / sessionStorage / history-state enforcement (no token persisted)              | GREEN  |
 | TM-FRONT.6  | CSP `default-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `form-action 'self'`, `script-src 'self'` | GREEN |
 | TM-FRONT.7  | Permissions-Policy `geolocation=(), microphone=(), camera=()`                               | GREEN  |
 | TM-FRONT.8  | X-Frame-Options DENY                                                                        | GREEN  |
 | TM-FRONT.9  | X-Content-Type-Options nosniff                                                              | GREEN  |
-| TM-FRONT.10 | Subresource Integrity for any external scripts (currently zero — verify)                    | VERIFY |
+| TM-FRONT.10 | Subresource Integrity for any external scripts (currently zero — verify)                    | GREEN (`web/index.html` ships exactly one same-origin `<script type="module">` and zero `<link>`s with cross-origin `href`; the HTML carries a `TM-FRONT.10` anchor comment for greppability. `web/tests/web-supply-and-sw.test.ts` parses `index.html?raw` with `DOMParser`, asserts the current zero-external baseline, AND enforces that any future external script/link must declare `integrity` + `crossorigin` together) |
 | TM-FRONT.11 | Disable autofill on session input fields (`autocomplete="off"`)                             | GREEN (`InputBar.tsx` and `PasteModal.tsx` set `autoComplete="off"` plus the `autoCapitalize`/`autoCorrect`/`spellCheck` cluster; `tests/InputBar.test.tsx` and `tests/PasteModal.test.tsx` each pin the full cluster via `getAttribute` — a regression that removes any one attribute fails) |
 | TM-FRONT.12 | Cross-Origin-Opener-Policy `same-origin`                                                    | DEFER (P2) |
 | TM-FRONT.13 | Cross-Origin-Embedder-Policy `require-corp`                                                 | DEFER (P2) |
