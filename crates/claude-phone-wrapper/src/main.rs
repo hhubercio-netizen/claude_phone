@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use anyhow::Context;
-use clap::Parser;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
@@ -17,7 +16,14 @@ use claude_phone_wrapper::session::SessionState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+    // TM-INPUT.8: fail-loud on `--claude-bin` validation failures per master
+    // spec §1.3. We're pre-init here (no log file yet), so eprintln is the
+    // user's only diagnostic channel. The wrapped anyhow error keeps the
+    // exit code path identical to other startup-phase failures.
+    let cli = Cli::parse_validated().map_err(|e| {
+        eprintln!("claude-phone: {e}");
+        anyhow::anyhow!("CLI validation failed")
+    })?;
 
     // The wrapper drives the host terminal in raw mode (see RawModeGuard),
     // so anything we print to stdout/stderr would corrupt the claude TUI.
