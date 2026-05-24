@@ -75,6 +75,25 @@ install_caddy_note() {
     fi
 }
 
+# TM-INFRA.3 — sshd hardening drop-in. Idempotent: re-running just
+# overwrites the file and reloads sshd. We `sshd -t` first so a broken
+# config never reaches a reload and locks the operator out.
+install_sshd_dropin() {
+    if ! command -v sshd >/dev/null; then
+        echo "sshd not installed; skipping TM-INFRA.3 drop-in" >&2
+        return 0
+    fi
+    install -d -m 0755 /etc/ssh/sshd_config.d
+    install -m 0644 "$REPO_DIR/deploy/sshd/99-claude-phone.conf" \
+        /etc/ssh/sshd_config.d/99-claude-phone.conf
+    if ! sshd -t; then
+        echo "sshd -t failed AFTER installing drop-in; reverting" >&2
+        rm -f /etc/ssh/sshd_config.d/99-claude-phone.conf
+        return 1
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+}
+
 start_services() {
     systemctl enable --now claude-phone-gateway
     systemctl restart caddy 2>/dev/null || true
@@ -87,6 +106,7 @@ build_and_install
 install_config
 install_systemd
 install_caddy_note
+install_sshd_dropin
 start_services
 
 systemctl status --no-pager claude-phone-gateway || true

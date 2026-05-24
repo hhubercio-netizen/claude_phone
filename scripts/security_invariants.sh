@@ -61,4 +61,34 @@ do
         || { echo "MISSING in ${UNIT}: ${directive} — TM-INFRA.1/.6/.8/.11 or TM-RATE.5"; exit 1; }
 done
 
+# TM-INFRA.3 — sshd drop-in must keep the brute-force-relevant directives
+# present. Allows the operator-specific AllowUsers to live in a separate
+# 98-* drop-in without breaking this check.
+echo "[security_invariants] sshd hardening drop-in ..."
+SSHD_DROPIN=deploy/sshd/99-claude-phone.conf
+[ -f "${SSHD_DROPIN}" ] \
+    || { echo "MISSING ${SSHD_DROPIN} — TM-INFRA.3"; exit 1; }
+for directive in \
+    "^PermitRootLogin no" \
+    "^PasswordAuthentication no" \
+    "^PubkeyAuthentication yes" \
+    "^ChallengeResponseAuthentication no" \
+    "^KbdInteractiveAuthentication no" \
+    "^MaxAuthTries 3" \
+    "^LoginGraceTime 30" \
+    "^X11Forwarding no" \
+    "^AllowAgentForwarding no" \
+    "^AllowTcpForwarding no" \
+    "^PermitUserEnvironment no" \
+    "^PermitEmptyPasswords no"
+do
+    grep -qE "${directive}" "${SSHD_DROPIN}" \
+        || { echo "MISSING in ${SSHD_DROPIN}: ${directive} — TM-INFRA.3"; exit 1; }
+done
+
+# TM-INFRA.3 — deploy.sh must wire the drop-in install. A refactor that
+# drops the call silently skips ssh hardening on every future deploy.
+grep -qF 'install_sshd_dropin' deploy/scripts/deploy.sh \
+    || { echo "MISSING install_sshd_dropin wiring in deploy.sh — TM-INFRA.3"; exit 1; }
+
 echo "[security_invariants] OK"
