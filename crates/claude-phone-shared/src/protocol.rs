@@ -1,3 +1,17 @@
+//! Control-plane wire types shared by wrapper and gateway.
+//!
+//! # JSON parsing depth (TM-INPUT.5)
+//!
+//! All `ControlMessage` parsing uses `serde_json::from_str` with the crate
+//! default recursion limit of 128 levels. The default is preserved
+//! intentionally — no caller in the workspace enables the `unbounded_depth`
+//! cargo feature, and the forward-looking tests `rejects_deeply_nested_json`
+//! / `rejects_deeply_nested_control_message` below catch any future drift
+//! (e.g. a transitive crate that flips on `unbounded_depth`, or a refactor
+//! that swaps in a custom `Deserializer` without re-setting the limit).
+//! Without the cap, an attacker sending arbitrarily deep `{"a":{"a":…}}`
+//! frames could stack-overflow the gateway parser thread.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{ApiKey, SessionToken};
@@ -71,4 +85,51 @@ pub struct PeerStatus {
 pub struct Close {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    // TM-INPUT.5: forward-looking depth guards. The serde_json default
+    // recursion limit (128) must keep rejecting deeply nested input — the
+    // assertions below break if anyone enables `serde_json/unbounded_depth`
+    // or swaps in a custom `Deserializer` without resetting `set_max_depth`.
+
+    #[test]
+    fn rejects_deeply_nested_json() {
+        // 200 levels of `{"a":` nested — exceeds serde_json's 128 default.
+        let mut s = String::new();
+        for _ in 0..200 {
+            s.push_str("{\"a\":");
+        }
+        s.push('1');
+        for _ in 0..200 {
+            s.push('}');
+        }
+        let result: Result<Value, _> = serde_json::from_str(&s);
+        assert!(
+            result.is_err(),
+            "200-deep JSON must reject; the serde_json default cap is 128",
+        );
+    }
+
+    #[test]
+    fn rejects_deeply_nested_control_message() {
+        // Same shape but typed at ControlMessage. Even if a future
+        // ControlMessage variant gained a recursive field, this test
+        // still catches an `unbounded_depth` regression — the parser hits
+        // the depth limit before ever inspecting the type's fields.
+        let mut s = String::new();
+        s.push_str("{\"type\":\"phone_hello\",\"token\":\"x\",\"cols\":80,\"rows\":24");
+        for _ in 0..200 {
+            s.push_str(",\"x\":{");
+        }
+        let result: Result<ControlMessage, _> = serde_json::from_str(&s);
+        assert!(
+            result.is_err(),
+            "200-deep ControlMessage payload must reject before reaching field validation",
+        );
+    }
 }
