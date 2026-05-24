@@ -31,6 +31,12 @@ pub enum TokenError {
 const SECRET_BYTES: usize = 32;
 const SECRET_STR_LEN: usize = (SECRET_BYTES * 4).div_ceil(3);
 
+// TM-INPUT.7: the only accepted bytes are ASCII alphanumerics plus `-`
+// and `_`. Control characters (NUL, BEL, ESC, DEL, etc.), whitespace,
+// path separators (`/`, `\`), URL-significant punctuation (`?`, `#`,
+// `&`, `=`), and any high-bit byte are rejected. The check is folded
+// non-short-circuit into `parse()` below to avoid a length-vs-charset
+// timing oracle on the rejection path.
 fn is_base64url_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'-' || b == b'_'
 }
@@ -170,3 +176,85 @@ macro_rules! define_secret_token {
 
 define_secret_token!(SessionToken, "SessionToken");
 define_secret_token!(ApiKey, "ApiKey");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a 43-byte test string that contains `bad` at index 5. Everything
+    /// else is a valid base64url byte (`A`). Each helper produces a string
+    /// whose charset is rejected only because of the single planted byte.
+    fn token_with_bad_byte(bad: u8) -> String {
+        let mut bytes = vec![b'A'; SECRET_STR_LEN];
+        bytes[5] = bad;
+        // Lossy is fine — none of the bad bytes the tests plant produce
+        // multi-byte UTF-8 sequences past byte 5 because we use single
+        // bytes that are either valid UTF-8 or `\xff` (handled below).
+        String::from_utf8(bytes).expect("constructed bytes are valid UTF-8")
+    }
+
+    // TM-INPUT.7: forward-looking rejection assertions on the SessionToken
+    // charset gate. The token string flows from `/s/<token>` and
+    // `/api/phone/<token>` into `SessionToken::parse`; any future relaxation
+    // of `is_base64url_byte` would silently re-open the rejected byte class.
+
+    #[test]
+    fn session_token_parse_rejects_nul_byte() {
+        assert!(SessionToken::parse(&token_with_bad_byte(0x00)).is_err());
+    }
+
+    #[test]
+    fn session_token_parse_rejects_bell_byte() {
+        assert!(SessionToken::parse(&token_with_bad_byte(0x07)).is_err());
+    }
+
+    #[test]
+    fn session_token_parse_rejects_esc_byte() {
+        assert!(SessionToken::parse(&token_with_bad_byte(0x1B)).is_err());
+    }
+
+    #[test]
+    fn session_token_parse_rejects_del_byte() {
+        assert!(SessionToken::parse(&token_with_bad_byte(0x7F)).is_err());
+    }
+
+    #[test]
+    fn session_token_parse_rejects_slash_and_backslash() {
+        // `/` and `\` are common path-traversal shapes. The forward-looking
+        // intent is that NEITHER ever reaches a log line redacted as a
+        // legitimate-looking token.
+        assert!(SessionToken::parse(&token_with_bad_byte(b'/')).is_err());
+        assert!(SessionToken::parse(&token_with_bad_byte(b'\\')).is_err());
+    }
+
+    #[test]
+    fn session_token_parse_rejects_high_bit_byte() {
+        // 0xFF is non-ASCII; non-ASCII is rejected by `is_ascii_alphanumeric`
+        // even though we don't loop through `is_base64url_byte` in this case
+        // (length check would still fail if UTF-8 expansion shifted bytes).
+        let mut bytes = vec![b'A'; SECRET_STR_LEN];
+        bytes[5] = 0xFF;
+        // raw bytes path — invalid UTF-8 hands us a non-string. Force a
+        // String via from_utf8_lossy and re-encode; the resulting `?`
+        // replacement char is still rejected by the charset gate.
+        let s = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(SessionToken::parse(&s).is_err());
+    }
+
+    #[test]
+    fn api_key_parse_rejects_nul_byte() {
+        // Same code path as SessionToken (via macro), still test it directly
+        // so a future refactor that splits the macro into two implementations
+        // cannot silently lose ApiKey coverage.
+        assert!(ApiKey::parse(&token_with_bad_byte(0x00)).is_err());
+    }
+
+    #[test]
+    fn parse_accepts_canonical_token() {
+        // Sanity: the test rig itself isn't broken — an all-`A` 43-byte
+        // string is a valid base64url shape and must parse Ok.
+        let s = "A".repeat(SECRET_STR_LEN);
+        assert!(SessionToken::parse(&s).is_ok());
+        assert!(ApiKey::parse(&s).is_ok());
+    }
+}

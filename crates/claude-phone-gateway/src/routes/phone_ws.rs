@@ -46,9 +46,13 @@ pub async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<PhoneWsState>,
 ) -> Response {
-    // Strict equality on token length — anything else is malformed and we
-    // refuse to even allocate the upgrade. The previous 8..=64 band let
+    // TM-WS.11: strict 43-char length check rejects malformed token shapes
+    // before allocating the WebSocket upgrade. The previous 8..=64 band let
     // off-shape strings reach SessionToken::parse() unnecessarily.
+    // TM-INPUT.7: charset is enforced one level down by `SessionToken::parse`
+    // via `is_base64url_byte` (alphanumeric + `-` + `_`). Anything else —
+    // NUL, BEL, ESC, DEL, slash, backslash, whitespace, high-bit bytes — is
+    // rejected and never reaches the WebSocket attach.
     if token_str.len() != SessionToken::LEN {
         return StatusCode::BAD_REQUEST.into_response();
     }
