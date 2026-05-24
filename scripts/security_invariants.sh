@@ -91,4 +91,29 @@ done
 grep -qF 'install_sshd_dropin' deploy/scripts/deploy.sh \
     || { echo "MISSING install_sshd_dropin wiring in deploy.sh — TM-INFRA.3"; exit 1; }
 
+# TM-INFRA.4 — fail2ban templates + filter regression. Presence checks
+# are unconditional; the fail2ban-regex assertion is soft on hosts
+# without fail2ban (dev workstations) — CI has it via the deploy-scripts
+# job's apt cache.
+echo "[security_invariants] fail2ban templates + filter regression ..."
+for f in \
+    deploy/fail2ban/jail.local \
+    deploy/fail2ban/filter.d/claude-phone.conf
+do
+    [ -f "${f}" ] \
+        || { echo "MISSING ${f} — TM-INFRA.4"; exit 1; }
+done
+grep -qF 'install_fail2ban' deploy/scripts/deploy.sh \
+    || { echo "MISSING install_fail2ban wiring in deploy.sh — TM-INFRA.4"; exit 1; }
+# Pin the failregex line so a drift that drops the ip capture or the
+# event tag fails the gate before fail2ban-regex would even run.
+grep -qF '"event":"auth_failure".*"ip":"<HOST>"' \
+    deploy/fail2ban/filter.d/claude-phone.conf \
+    || { echo "MISSING auth_failure+ip failregex pattern — TM-INFRA.4"; exit 1; }
+if command -v fail2ban-regex >/dev/null 2>&1; then
+    ./scripts/fail2ban_filter_test.sh
+else
+    echo "  (fail2ban-regex unavailable on this host — skipping regex assert)"
+fi
+
 echo "[security_invariants] OK"

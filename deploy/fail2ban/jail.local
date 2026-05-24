@@ -1,0 +1,48 @@
+# TM-INFRA.4 — claude-phone fail2ban jails. Deployed to /etc/fail2ban/
+# by deploy/scripts/deploy.sh::install_fail2ban.
+#
+# Three layers:
+# - sshd jail uses the distro default filter — covers brute-force SSH.
+# - recidive escalates repeat-offenders across all jails (1 week ban
+#   after 3 prior bans). Catches attackers who hop between vectors.
+# - claude-phone jail watches the gateway's auth-failure JSON log via
+#   the filter defined in filter.d/claude-phone.conf. Layered on top of
+#   the in-process TM-RATE.2 lockout: TM-RATE.2 is per-IP soft-state in
+#   the gateway, fail2ban is kernel-level ufw drop — survives gateway
+#   restarts, blocks at the kernel, doesn't cost the gateway a single
+#   accept() to enforce.
+#
+# banaction=ufw mirrors the firewall layer set up by setup-ufw.sh —
+# fail2ban inserts drop rules into the same iptables tables ufw
+# manages, no rule conflicts.
+#
+# backend=systemd reads journalctl directly instead of tailing files.
+# Matches TM-INFRA.9 journald persistence (the claude-phone jail still
+# uses logpath=/var/log/syslog because ForwardToSyslog=yes routes the
+# gateway's tracing JSON there; switching to journald backend for it
+# would require a unit-filtered MATCH which is brittle).
+
+[DEFAULT]
+banaction = ufw
+backend = systemd
+
+[sshd]
+enabled = true
+maxretry = 3
+findtime = 10m
+bantime = 1h
+
+[recidive]
+enabled = true
+maxretry = 3
+findtime = 1d
+bantime = 1w
+
+[claude-phone]
+enabled = true
+port = 443
+filter = claude-phone
+logpath = /var/log/syslog
+maxretry = 5
+findtime = 10m
+bantime = 1d

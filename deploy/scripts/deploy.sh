@@ -94,6 +94,22 @@ install_sshd_dropin() {
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
 }
 
+# TM-INFRA.4 — fail2ban jails + claude-phone filter. Idempotent.
+# Restart (not reload) because fail2ban reloads filter.d at startup
+# only; a `reload` keeps the old failregex cached.
+install_fail2ban() {
+    if ! command -v fail2ban-server >/dev/null; then
+        echo "fail2ban not installed; skipping TM-INFRA.4" >&2
+        return 0
+    fi
+    install -d -m 0755 /etc/fail2ban/filter.d
+    install -m 0644 "$REPO_DIR/deploy/fail2ban/jail.local" /etc/fail2ban/jail.local
+    install -m 0644 "$REPO_DIR/deploy/fail2ban/filter.d/claude-phone.conf" \
+        /etc/fail2ban/filter.d/claude-phone.conf
+    systemctl enable --now fail2ban
+    systemctl restart fail2ban
+}
+
 start_services() {
     systemctl enable --now claude-phone-gateway
     systemctl restart caddy 2>/dev/null || true
@@ -107,6 +123,7 @@ install_config
 install_systemd
 install_caddy_note
 install_sshd_dropin
+install_fail2ban
 start_services
 
 systemctl status --no-pager claude-phone-gateway || true
