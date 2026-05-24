@@ -1,0 +1,7 @@
+# cargo-fuzz scratch state — corpus + crash artifacts are generated per
+# run on the CI host and not worth versioning here. If we ever want to
+# carry a seed corpus into the repo we'll add `!corpus/seed/` selectively.
+target/
+corpus/
+artifacts/
+coverage/

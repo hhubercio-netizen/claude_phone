@@ -1,0 +1,59 @@
+[package]
+# TM-TEST.1 — cargo-fuzz workspace crate driving libFuzzer harnesses for
+# the three parser surfaces that handle externally-controlled bytes on
+# the wire: ControlMessage JSON, SessionToken base64url, ApiKey base64url.
+# A panic in any of these on adversarial input is a DoS or possibly worse,
+# so we want libFuzzer's coverage-guided mutation hunting for crashes 24/7
+# under the nightly `fuzz-smoke` CI job.
+name = "claude-phone-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+# libfuzzer-sys is the Rust bindings around libFuzzer's libFuzzerDriver.cpp.
+# Pinned to the latest 0.4 series (matches cargo-fuzz's own pin).
+libfuzzer-sys = "0.4"
+# Path dep on shared so we can drive ControlMessage / SessionToken / ApiKey
+# without a published crate version.
+claude-phone-shared = { path = "../claude-phone-shared" }
+serde_json = "1"
+
+# Three independent binaries, one per fuzz target. Each becomes its own
+# `cargo fuzz run <name>` invocation in the nightly smoke job.
+[[bin]]
+name = "control_message"
+path = "fuzz_targets/control_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session_token"
+path = "fuzz_targets/session_token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "api_key"
+path = "fuzz_targets/api_key.rs"
+test = false
+doc = false
+bench = false
+
+# Reduced debug info shortens link times in cargo-fuzz's iterative loop
+# without hiding the backtrace on a crash (libFuzzer prints the symbol
+# names from the binary's own symtab).
+[profile.release]
+debug = 1
+
+# Keep this crate out of the parent workspace's resolution so
+# `cargo build --workspace` on stable does not trip over libfuzzer-sys's
+# nightly requirements. The parent Cargo.toml's `exclude` is the other
+# half of this fence.
+[workspace]

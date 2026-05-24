@@ -1,0 +1,43 @@
+name: Fuzz Smoke (TM-TEST.1)
+
+# Nightly smoke run over the cargo-fuzz harnesses in
+# `crates/claude-phone-fuzz`. 30 seconds per target is enough to catch
+# the regression class we care about — a panic on adversarial input on
+# the deserialization hot path — without making the cron noisy. A real
+# fuzzing campaign would run for hours; this is the watchdog that
+# confirms the harness still BUILDS and exercises the targets at all.
+#
+# Manual `workflow_dispatch` is also enabled so we can re-run on demand
+# after a parser change without waiting for the cron.
+on:
+  schedule:
+    # 04:17 UTC daily — off-peak, and the odd minute reduces the odds
+    # of colliding with GitHub-side scheduler pile-ups at HH:00.
+    - cron: '17 4 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  fuzz-smoke:
+    name: Fuzz smoke (30s/target)
+    runs-on: ubuntu-latest
+    # Hard upper bound: 3 targets * 30s smoke + cargo-fuzz install + build.
+    # Comfortable ceiling at 20 min; anything past that is a runner stall
+    # and should fail fast rather than burn an action-minute quota.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nightly toolchain
+        uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Scope cache to the fuzz crate's own target dir so it does not
+          # contaminate the stable workspace cache used by the `rust` job.
+          workspaces: crates/claude-phone-fuzz -> target
+      - name: Install cargo-fuzz
+        run: cargo install --locked cargo-fuzz
+      - name: Smoke fuzz — control_message (30s)
+        run: cargo fuzz run --fuzz-dir=crates/claude-phone-fuzz control_message -- -max_total_time=30
+      - name: Smoke fuzz — session_token (30s)
+        run: cargo fuzz run --fuzz-dir=crates/claude-phone-fuzz session_token -- -max_total_time=30
+      - name: Smoke fuzz — api_key (30s)
+        run: cargo fuzz run --fuzz-dir=crates/claude-phone-fuzz api_key -- -max_total_time=30

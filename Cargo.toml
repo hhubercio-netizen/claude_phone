@@ -6,6 +6,13 @@ members = [
     "crates/claude-phone-pair",
     "crates/claude-phone-gateway",
 ]
+# TM-TEST.1 — `crates/claude-phone-fuzz` is a stand-alone cargo-fuzz crate.
+# It is intentionally NOT a workspace member: libfuzzer-sys requires a
+# nightly toolchain + sanitizer rustflags, which would force every
+# `cargo build --workspace` invocation onto nightly. Keeping it excluded
+# means `cargo test --workspace` on stable stays clean, while
+# `.github/workflows/fuzz-smoke.yml` drives the fuzz targets on nightly.
+exclude = ["crates/claude-phone-fuzz"]
 
 [workspace.package]
 version = "0.1.0"
