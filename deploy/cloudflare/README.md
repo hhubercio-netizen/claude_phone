@@ -38,3 +38,42 @@ cache and let the upstream gzip handle it.)
 - **Access Rules**: optionally restrict `/api/wrapper` to your home IP (or VPN
   range) using an IP Access Rule. Phones access `/api/phone/*` from anywhere
   and need broad access.
+
+## TLS mode (TM-TLS.8)
+
+Set **SSL/TLS encryption mode** to **Full (strict)** under SSL/TLS → Overview.
+This is the only acceptable mode for the threat model:
+
+| Mode             | Browser ↔ CF | CF ↔ origin              | Acceptable?               |
+|------------------|--------------|--------------------------|---------------------------|
+| Off              | plain HTTP   | plain HTTP               | no                        |
+| Flexible         | TLS          | plain HTTP               | no — origin sees cleartext |
+| Full             | TLS          | TLS, cert NOT validated  | no — MITM CF↔origin possible |
+| **Full (strict)** | TLS          | TLS, cert validated      | yes — required             |
+
+`deploy/scripts/post_deploy_verify.sh` checks the active mode via the
+Cloudflare API on every deploy. Provide the two env vars before running
+`deploy/scripts/deploy.sh`:
+
+```
+export CF_API_TOKEN=<token with Zone:SSL and Certificates:Read>
+export CF_ZONE_ID=<zone id, visible on the Overview tab>
+```
+
+Create the token in CF dashboard → My Profile → API Tokens → Create Token →
+Custom token. Permissions: `Zone — SSL and Certificates — Read`. Zone
+Resources: `Include — Specific zone — claude-phone.pl`. Store the resulting
+token in `/etc/claude-phone/cf.env` (mode 0600, owned by root) and source
+it before `deploy.sh`:
+
+```
+sudo install -m 0600 -o root -g root /dev/stdin /etc/claude-phone/cf.env <<'EOF'
+export CF_API_TOKEN=...
+export CF_ZONE_ID=...
+EOF
+
+sudo bash -c 'source /etc/claude-phone/cf.env && /opt/claude-phone-src/deploy/scripts/deploy.sh'
+```
+
+Without those env vars the verify script soft-fails with a warning;
+under `STRICT=1` (the production deploy default) the deploy aborts.

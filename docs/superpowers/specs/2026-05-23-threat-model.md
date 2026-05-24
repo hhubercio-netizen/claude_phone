@@ -617,7 +617,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-TLS.5   | Referrer-Policy `no-referrer`                                                               | GREEN  |
 | TM-TLS.6   | OCSP stapling (Caddy default on)                                                            | GREEN (`deploy/scripts/post_deploy_verify.sh` openssl s_client -status; invoked from `deploy.sh` with STRICT=1) |
 | TM-TLS.7   | TLS scan (testssl.sh) — all A grades                                                        | GREEN (`deploy/scripts/post_deploy_verify.sh` testssl.sh --jsonfile; fails on HIGH/CRITICAL under STRICT=1) |
-| TM-TLS.8   | Cloudflare TLS mode Full (strict)                                                           | VERIFY |
+| TM-TLS.8   | Cloudflare TLS mode Full (strict)                                                           | GREEN (`deploy/scripts/post_deploy_verify.sh` CF API `/zones/.../settings/ssl` check; STRICT=1 aborts deploy on non-`strict` mode; `deploy/cloudflare/README.md` documents token+zone provisioning) |
 | TM-TLS.9   | WS over wss only, never ws (Origin + scheme check)                                          | GREEN  |
 
 ### Input validation / Output encoding (TM-INPUT)

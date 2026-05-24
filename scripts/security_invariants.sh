@@ -33,4 +33,11 @@ echo "[security_invariants] post-deploy TLS verify wiring ..."
 grep -qF 'STRICT=1 bash "$REPO_DIR/deploy/scripts/post_deploy_verify.sh"' deploy/scripts/deploy.sh \
     || { echo "MISSING STRICT=1 invocation of post_deploy_verify.sh in deploy.sh — TM-TLS.6/.7"; exit 1; }
 
+# TM-TLS.8 — assert the CF TLS-mode check is present in post_deploy_verify.sh.
+# The check is conditional on CF_API_TOKEN at runtime, but the *code path*
+# must always exist; a rewrite that drops this block would silently lose
+# coverage for Full-strict drift on the Cloudflare account.
+grep -qF 'settings/ssl' deploy/scripts/post_deploy_verify.sh \
+    || { echo "MISSING Cloudflare TLS-mode check in post_deploy_verify.sh — TM-TLS.8"; exit 1; }
+
 echo "[security_invariants] OK"

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# TM-TLS.6 + TM-TLS.7 (and TM-TLS.1 belt-and-suspenders) — post-deploy
-# verification of edge TLS posture.
+# TM-TLS.6 + TM-TLS.7 + TM-TLS.8 (and TM-TLS.1 belt-and-suspenders) —
+# post-deploy verification of edge TLS posture.
 #
 # Run after every deploy and after any Cloudflare / DNS / Caddy change
 # to confirm:
 # - TM-TLS.1  edge negotiates TLS 1.3 and refuses TLS 1.2.
 # - TM-TLS.6  OCSP stapling is active (openssl s_client -status).
 # - TM-TLS.7  testssl.sh sees no HIGH / CRITICAL findings.
+# - TM-TLS.8  Cloudflare SSL/TLS mode is "strict" (Full strict).
 #
 # Default (STRICT unset) soft-skips when the target is unreachable, so
 # devs can run this against staging or during a planned outage without
@@ -17,6 +18,8 @@
 #   CP_DOMAIN     domain to probe              default: claude-phone.pl
 #   STRICT        1 → fail on any warning      default: 0 (soft)
 #   TESTSSL_PATH  path to testssl.sh binary    default: $(command -v testssl.sh)
+#   CF_API_TOKEN  Cloudflare token with Zone SSL+Certs read (TM-TLS.8)
+#   CF_ZONE_ID    Cloudflare zone id for claude-phone.pl (TM-TLS.8)
 #
 # Exit 0 on pass (including soft skip), 1 on any failure under STRICT.
 
@@ -98,33 +101,70 @@ fi
 
 if [ -z "${TESTSSL}" ]; then
     soft_fail "testssl.sh not on PATH and TESTSSL_PATH unset — TM-TLS.7 not exercised. Install: git clone https://github.com/drwetter/testssl.sh /opt/testssl.sh && export TESTSSL_PATH=/opt/testssl.sh/testssl.sh"
-    exit 0
+else
+    require jq
+
+    echo "[post_deploy] TM-TLS.7 — testssl.sh full scan (~2 min)"
+    TESTSSL_JSON=$(mktemp)
+    trap 'rm -f "${TESTSSL_JSON}"' EXIT
+
+    # --warnings off : skip interactive "are you sure?" prompts
+    # --color 0      : strip ANSI for cleaner deploy logs
+    # --quiet        : suppress banner
+    # --jsonfile     : flat JSON array of findings
+    if ! "${TESTSSL}" --quiet --warnings off --color 0 \
+            --jsonfile "${TESTSSL_JSON}" \
+            "https://${DOMAIN}/" >/dev/null 2>&1; then
+        soft_fail "testssl.sh exited non-zero (network or invocation issue)"
+    else
+        HIGH_COUNT=$(jq '[.[] | select(.severity == "HIGH" or .severity == "CRITICAL")] | length' "${TESTSSL_JSON}")
+        if [ "${HIGH_COUNT}" -gt 0 ]; then
+            echo "FAIL: testssl.sh reported ${HIGH_COUNT} HIGH/CRITICAL finding(s):"
+            jq '.[] | select(.severity == "HIGH" or .severity == "CRITICAL") | {id, severity, finding}' "${TESTSSL_JSON}"
+            soft_fail "testssl.sh ${HIGH_COUNT} HIGH/CRITICAL — see above"
+        else
+            echo "  OK: testssl.sh — no HIGH/CRITICAL"
+        fi
+    fi
 fi
 
-require jq
+# --- TM-TLS.8: Cloudflare TLS mode = Full (strict) -----------------------
+#
+# Asserts the CF zone setting is `strict` (not `flexible`, `full`, or `off`).
+# Flexible would let an attacker who can reach the origin bypass TLS entirely;
+# Full (without strict) accepts a self-signed origin cert and so loses MITM
+# protection between CF and the home server. Only `strict` matches the design.
 
-echo "[post_deploy] TM-TLS.7 — testssl.sh full scan (~2 min)"
-TESTSSL_JSON=$(mktemp)
-trap 'rm -f "${TESTSSL_JSON}"' EXIT
+if [ -z "${CF_API_TOKEN:-}" ]; then
+    soft_fail "CF_API_TOKEN unset — TM-TLS.8 (CF TLS mode) not exercised. See deploy/cloudflare/README.md."
+elif [ -z "${CF_ZONE_ID:-}" ]; then
+    soft_fail "CF_API_TOKEN set but CF_ZONE_ID missing — TM-TLS.8 cannot be verified"
+else
+    require jq
 
-# --warnings off : skip interactive "are you sure?" prompts
-# --color 0      : strip ANSI for cleaner deploy logs
-# --quiet        : suppress banner
-# --jsonfile     : flat JSON array of findings
-if ! "${TESTSSL}" --quiet --warnings off --color 0 \
-        --jsonfile "${TESTSSL_JSON}" \
-        "https://${DOMAIN}/" >/dev/null 2>&1; then
-    soft_fail "testssl.sh exited non-zero (network or invocation issue)"
-    exit 0
+    echo "[post_deploy] TM-TLS.8 — Cloudflare TLS mode"
+    CF_RESP=$(curl -fsS --max-time 10 \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" \
+        -H "Content-Type: application/json" \
+        "https://api.cloudflare.com/client/v4/zones/${CF_ZONE_ID}/settings/ssl" \
+        2>/dev/null || echo '{"success":false}')
+
+    if ! jq -e '.success == true' <<<"${CF_RESP}" >/dev/null; then
+        soft_fail "Cloudflare API call failed (token invalid? zone_id wrong?) — TM-TLS.8"
+    else
+        CF_MODE=$(jq -r '.result.value // empty' <<<"${CF_RESP}")
+        case "${CF_MODE}" in
+            strict)
+                echo "  OK: Cloudflare TLS mode = strict (Full strict)"
+                ;;
+            full|flexible|off|"")
+                soft_fail "Cloudflare TLS mode = '${CF_MODE:-empty}' (expected 'strict' for TM-TLS.8)"
+                ;;
+            *)
+                soft_fail "Cloudflare TLS mode = '${CF_MODE}' — unrecognized, expected 'strict'"
+                ;;
+        esac
+    fi
 fi
 
-HIGH_COUNT=$(jq '[.[] | select(.severity == "HIGH" or .severity == "CRITICAL")] | length' "${TESTSSL_JSON}")
-
-if [ "${HIGH_COUNT}" -gt 0 ]; then
-    echo "FAIL: testssl.sh reported ${HIGH_COUNT} HIGH/CRITICAL finding(s):"
-    jq '.[] | select(.severity == "HIGH" or .severity == "CRITICAL") | {id, severity, finding}' "${TESTSSL_JSON}"
-    soft_fail "testssl.sh ${HIGH_COUNT} HIGH/CRITICAL — see above"
-fi
-
-echo "  OK: testssl.sh — no HIGH/CRITICAL"
-echo "[post_deploy] all TLS checks passed for ${DOMAIN}"
+echo "[post_deploy] checks complete for ${DOMAIN} (STRICT=${STRICT})"
