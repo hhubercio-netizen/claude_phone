@@ -25,6 +25,19 @@ jobs:
       # TM-CODE.5 — block unbounded tokio channels in prod (slow-leak DoS).
       - name: TM-CODE.5 — unbounded-channel gate
         run: bash scripts/check_unbounded_channels.sh
+      # TM-LEAK.1 / TM-TEST.5 — heuristic gate against tracing! call sites
+      # that print a secret-named identifier without going through our
+      # redacting wrapper types (ApiKey / SessionToken). False positives
+      # acknowledge with an inline `// TM-LEAK.1: safe — <reason>` comment.
+      - name: TM-LEAK.1 — tracing secret-name gate
+        run: bash scripts/check_tracing_secrets.sh
+      # TM-LEAK.2 / TM-TEST.5 — heuristic gate against #[derive(Debug)] on
+      # structs that have a secret-named field declared as a bare type
+      # (rather than ApiKey / SessionToken). Auto-Debug prints field values
+      # verbatim, which silently leaks the moment anyone Debug-prints the
+      # struct anywhere on the call path.
+      - name: TM-LEAK.2 — derive(Debug)+secret-field gate
+        run: bash scripts/check_debug_derive_secrets.sh
       # TM-LEAK.3 — assert WS guards stay symmetric across phone/wrapper
       # routes, or have an explicit asymmetric carveout in the sweep script.
       - name: TM-LEAK.3 — asymmetric WS guards

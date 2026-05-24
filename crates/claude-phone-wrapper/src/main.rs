@@ -131,7 +131,7 @@ async fn main() -> anyhow::Result<()> {
                     Some(()) => {
                         let s = session.lock().await;
                         let Some(token) = s.token.clone() else {
-                            tracing::warn!("pair triggered but no token in session; ignoring");
+                            tracing::warn!("pair triggered but no token in session; ignoring"); // TM-LEAK.1: safe — literal message, no token value interpolated.
                             continue;
                         };
                         // NB: do NOT log public_url with ?fmt — it contains the

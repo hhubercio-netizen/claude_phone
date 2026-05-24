@@ -23,7 +23,11 @@ struct Cli {
     json: bool,
 }
 
-#[derive(Debug, Deserialize)]
+// TM-LEAK.2: `token` is the bearer for the wrapper RPC surface. We do NOT
+// derive Debug here — auto-Debug would print the token verbatim if any
+// caller adds `tracing::debug!(?response, ...)`. This struct is only ever
+// consumed by direct field access for stdout output; never Debug-printed.
+#[derive(Deserialize)]
 struct PairResponse {
     url: String,
     token: String,
