@@ -33,5 +33,33 @@ RestrictRealtime=true
 SystemCallArchitectures=native
 CapabilityBoundingSet=
 
+# TM-INFRA.1 — syscall filter. @system-service is systemd's recommended
+# baseline for daemons; subtract @privileged (mount, ptrace, etc.) and
+# @resources (set*id, setrlimit) which @system-service permits but a
+# claude-phone gateway never uses. SystemCallErrorNumber=EPERM keeps a
+# denied call as a recoverable error rather than SIGSYS — important
+# for diagnosing future tokio internals that the filter may shadow.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# TM-INFRA.6 / TM-RATE.5 — resource caps.
+# LimitNOFILE: sized 50x above peak (max_sessions=32 * ~4 FDs/session).
+# MemoryMax:   steady-state < 30 MB; 256M tolerates flash-crowd spikes.
+# CPUQuota:    single-core VPS headroom for SSH + Caddy + gateway.
+LimitNOFILE=8192
+MemoryMax=256M
+CPUQuota=80%
+
+# TM-INFRA.8 — never write core dumps. A core file from a crashed
+# gateway can leak session tokens, API keys, in-flight stdout buffers.
+LimitCORE=0
+
+# TM-INFRA.11 — gateway cannot overwrite its own binary or web assets.
+# A compromise that achieves arbitrary-write needs CAP_SYS_ADMIN to
+# remount; combined with CapabilityBoundingSet= above, persistence on
+# disk is foreclosed.
+ReadOnlyPaths=/opt/claude-phone
+
 [Install]
 WantedBy=multi-user.target

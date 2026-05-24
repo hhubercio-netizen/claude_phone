@@ -40,4 +40,25 @@ grep -qF 'STRICT=1 bash "$REPO_DIR/deploy/scripts/post_deploy_verify.sh"' deploy
 grep -qF 'settings/ssl' deploy/scripts/post_deploy_verify.sh \
     || { echo "MISSING Cloudflare TLS-mode check in post_deploy_verify.sh — TM-TLS.8"; exit 1; }
 
+# TM-INFRA.1 / .6 / .8 / .11 + TM-RATE.5 — systemd unit hardening must
+# stay present. A line-presence grep beats a runtime check: it works on
+# any platform and trips on any future refactor that silently drops a
+# directive. Runtime verification is post_deploy_verify.sh's job.
+echo "[security_invariants] systemd unit hardening directives ..."
+UNIT=deploy/systemd/claude-phone-gateway.service
+for directive in \
+    "^NoNewPrivileges=true" \
+    "^ProtectSystem=strict" \
+    "^SystemCallFilter=@system-service" \
+    "^SystemCallFilter=~@privileged @resources" \
+    "^SystemCallErrorNumber=EPERM" \
+    "^LimitNOFILE=8192" \
+    "^MemoryMax=256M" \
+    "^LimitCORE=0" \
+    "^ReadOnlyPaths=/opt/claude-phone"
+do
+    grep -qE "${directive}" "${UNIT}" \
+        || { echo "MISSING in ${UNIT}: ${directive} — TM-INFRA.1/.6/.8/.11 or TM-RATE.5"; exit 1; }
+done
+
 echo "[security_invariants] OK"

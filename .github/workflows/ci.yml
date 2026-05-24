@@ -57,6 +57,18 @@ jobs:
       - name: Validate Caddyfile
         run: caddy validate --config deploy/caddy/Caddyfile --adapter caddyfile
 
+  systemd-unit:
+    name: systemd unit validate (TM-INFRA.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # systemd-analyze on ubuntu-latest validates unit-file syntax and
+      # semantics. It tolerates a missing ExecStart binary (claude-phone
+      # only exists on the deploy host) and surfaces typos / unknown
+      # directives, which is exactly the regression class we care about.
+      - name: systemd-analyze verify
+        run: systemd-analyze verify deploy/systemd/claude-phone-gateway.service
+
   cargo-deny:
     name: cargo deny (TM-SUPPLY.4)
     runs-on: ubuntu-latest

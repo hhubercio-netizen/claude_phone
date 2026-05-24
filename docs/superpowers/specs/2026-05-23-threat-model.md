@@ -641,7 +641,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-RATE.2  | Auth-attempt rate limit (10 failures/IP/60s → exp backoff `2^n` s, cap 1 h) via `AuthRateLimiter` in `rate_limit.rs`; wired in `wrapper_ws::handler` (locked IPs get 429 before upgrade) and `handle_socket` (failure / success counters); covered by `tests/rate_limit.rs::wrapper_auth_failures_trigger_per_ip_lockout` + unit tests in `rate_limit::tests` | GREEN  |
 | TM-RATE.3  | Per-connection msg/s rate via `ConnRateLimiter` (100/s phone→gw using `PHONE_TO_GW_MSG_PER_SEC`, 1000/s wrapper→phone using `GW_TO_PHONE_MSG_PER_SEC`); wired in both `wrapper_ws::outgoing_task` and `phone_ws::outgoing_task`. Flooding cancels the session via `session.cancel.cancel()`. Covered by `tests/rate_limit.rs::wrapper_message_flood_closes_session` + unit tests in `rate_limit::tests`. | GREEN  |
 | TM-RATE.4  | Per-session memory cap `PHONE_BUFFER_BYTES_CAP = 64 KiB`, drop oldest on overflow (session.rs:24) | GREEN  |
-| TM-RATE.5  | FD exhaustion: systemd LimitNOFILE + warning alert at 80%                                   | TODO   |
+| TM-RATE.5  | FD exhaustion: systemd LimitNOFILE + warning alert at 80%                                   | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitNOFILE=8192`; 80% alert deferred per sub-spec 4.9 §1.1, observability owned by future 4.4) |
 | TM-RATE.6  | Slow-write defense: bounded mpsc channels (256 frames, `registry.rs`) plus `SINK_SEND_TIMEOUT = 5 s` wrapping every `sink.send` in both `wrapper_ws::incoming_task` and `phone_ws::incoming_task`; timeout / error cancels the session via `session.cancel.cancel()`. Constant-bounds covered by `tests/rate_limit.rs::sink_send_timeout_is_bounded_and_reasonable`; wiring is enforced at compile time via the `SINK_SEND_TIMEOUT` import in both routes (clippy `-D warnings` would catch unused-import regression). | GREEN  |
 | TM-RATE.7  | Post-hello idle / no-pong watchdog: every `Message::Pong` stamps `last_pong_ms: Arc<AtomicU64>` (millis since socket open); every 30 s keepalive tick checks `age > PONG_DEADLINE` (90 s) and cancels the session if so. Wired into both `wrapper_ws.rs` and `phone_ws.rs`. Constant-bounds covered by `tests/rate_limit.rs::pong_deadline_is_bounded_and_reasonable`; wiring is enforced at compile time via `PONG_DEADLINE` imports in both routes. | GREEN  |
 | TM-RATE.8  | Slow-loris recv_hello timeout 10 s on wrapper_ws                                            | GREEN  |
@@ -679,17 +679,17 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID          | Mitigation                                                                                  | Status |
 |-------------|---------------------------------------------------------------------------------------------|--------|
-| TM-INFRA.1  | systemd hardening block (NoNewPrivileges, ProtectSystem=strict, ProtectHome, PrivateTmp, PrivateDevices, RestrictAddressFamilies, SystemCallFilter, CapabilityBoundingSet=, MemoryDenyWriteExecute, LockPersonality) | TODO |
+| TM-INFRA.1  | systemd hardening block (NoNewPrivileges, ProtectSystem=strict, ProtectHome, PrivateTmp, PrivateDevices, RestrictAddressFamilies, SystemCallFilter, CapabilityBoundingSet=, MemoryDenyWriteExecute, LockPersonality) | GREEN (`deploy/systemd/claude-phone-gateway.service` adds `SystemCallFilter=@system-service ~@privileged ~@resources` with `SystemCallErrorNumber=EPERM`; remaining directives already present pre-4.9) |
 | TM-INFRA.2  | ufw default deny incoming; allow 22 from trusted IPs; allow 443 from CF IP ranges only      | TODO   |
 | TM-INFRA.3  | sshd hardening: PermitRootLogin no, PasswordAuthentication no, AllowUsers whitelist, MaxAuthTries 3, LoginGraceTime 30 | TODO |
 | TM-INFRA.4  | fail2ban: sshd jail + recidive jail + claude-phone jail (watches gateway auth-failure log)  | TODO   |
 | TM-INFRA.5  | auditd watch on `/etc/claude-phone/`, `/opt/claude-phone/`, `/etc/systemd/system/claude-phone-gateway.service` | TODO |
-| TM-INFRA.6  | systemd LimitNOFILE, MemoryMax, CPUQuota                                                    | TODO   |
+| TM-INFRA.6  | systemd LimitNOFILE, MemoryMax, CPUQuota                                                    | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitNOFILE=8192`, `MemoryMax=256M`, `CPUQuota=80%`) |
 | TM-INFRA.7  | Cloudflare WAF rules (Free tier): block common-scan paths (/.git, /.env, /wp-admin)         | TODO   |
-| TM-INFRA.8  | systemd LimitCORE=0 (no core dumps)                                                         | TODO   |
+| TM-INFRA.8  | systemd LimitCORE=0 (no core dumps)                                                         | GREEN (`deploy/systemd/claude-phone-gateway.service` `LimitCORE=0`) |
 | TM-INFRA.9  | systemd journal persistence; ReadWritePaths=/var/lib/claude-phone                           | TODO   |
 | TM-INFRA.10 | Caddy ↔ Gateway on 127.0.0.1 loopback only (kernel-enforced)                                | VERIFY |
-| TM-INFRA.11 | `claude-phone` user non-root, no shell, owned dirs read-only via systemd ReadOnlyPaths      | TODO   |
+| TM-INFRA.11 | `claude-phone` user non-root, no shell, owned dirs read-only via systemd ReadOnlyPaths      | GREEN (`deploy.sh` creates `claude-phone` user with `/sbin/nologin`; `deploy/systemd/claude-phone-gateway.service` adds `ReadOnlyPaths=/opt/claude-phone`) |
 
 ### Frontend (TM-FRONT)
 
