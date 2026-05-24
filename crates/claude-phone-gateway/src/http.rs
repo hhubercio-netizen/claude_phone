@@ -87,6 +87,11 @@ pub fn build_app(config: &GatewayConfig) -> anyhow::Result<Router> {
         dir: config.static_dir.clone(),
     };
 
+    // TM-INPUT.6: tower-http's ServeDir canonicalizes the request path and
+    // rejects any traversal that escapes the configured root. Verified by
+    // `tests/path_traversal_test.rs::serve_dir_rejects_*`. A future swap to
+    // a hand-rolled file server would have to re-prove these tests; the
+    // forward-looking suite is the only thing that catches the regression.
     let assets = ServeDir::new(config.static_dir.join("assets")).precompressed_gzip();
 
     // TraceLayer with a span builder that redacts session tokens from the URI
