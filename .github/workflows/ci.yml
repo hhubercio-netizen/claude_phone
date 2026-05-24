@@ -11,7 +11,7 @@ jobs:
     name: Rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -56,7 +56,7 @@ jobs:
     name: cargo audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-audit
@@ -67,7 +67,7 @@ jobs:
     name: Caddyfile validate (TM-TLS.1)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Caddy
         run: |
           set -euxo pipefail
@@ -83,7 +83,7 @@ jobs:
     name: systemd unit validate (TM-INFRA.1)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # systemd-analyze on ubuntu-latest validates unit-file syntax and
       # semantics. It tolerates a missing ExecStart binary (claude-phone
       # only exists on the deploy host) and surfaces typos / unknown
@@ -95,7 +95,7 @@ jobs:
     name: deploy scripts shellcheck (TM-INFRA.2 etc.)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       # shellcheck is installed by default on ubuntu-latest. Scope is
       # the deploy/ and scripts/ tree — every shell artifact we ship.
       - name: shellcheck deploy/ + scripts/
@@ -109,7 +109,7 @@ jobs:
     name: cargo deny (TM-SUPPLY.4)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           # Advisories are covered by the dedicated `cargo-audit` job above.
@@ -127,7 +127,7 @@ jobs:
     # from the root to install the workspace. The web-specific scripts
     # are re-exported at the root as `lint:web` / `test:web` / `build:web`.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
