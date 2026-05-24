@@ -27,10 +27,10 @@ SAMPLE=$(mktemp)
 trap 'rm -f "${SAMPLE}"' EXIT
 
 # Two canned lines: one auth_failure (MUST match), one auth_success
-# (MUST NOT match). Mirrors the JSON shape spec'd in sub-spec 4.2.
+# (MUST NOT match). Mirrors the JSON shape pinned by TM-AUTH.7.
 cat > "${SAMPLE}" <<'EOF'
-2026-05-23T12:34:56.000Z {"timestamp":"2026-05-23T12:34:56.000Z","level":"WARN","fields":{"event":"auth_failure","ip":"203.0.113.42","correlation_id":"01HX0000000000000000000000","reason":"invalid_api_key"}}
-2026-05-23T12:35:00.000Z {"timestamp":"2026-05-23T12:35:00.000Z","level":"INFO","fields":{"event":"auth_success","ip":"203.0.113.99","correlation_id":"01HY0000000000000000000000"}}
+2026-05-23T12:34:56.000Z {"timestamp":"2026-05-23T12:34:56.000Z","level":"WARN","fields":{"event":"auth_failure","conn_id":"7bff935b1c7265ad","peer_ip":"203.0.113.42","reason":"invalid_api_key","route":"wrapper_ws"}}
+2026-05-23T12:35:00.000Z {"timestamp":"2026-05-23T12:35:00.000Z","level":"INFO","fields":{"event":"auth_success","conn_id":"3acdef0123456789","peer_ip":"203.0.113.99","route":"wrapper_ws"}}
 EOF
 
 # --print-no-missed suppresses unmatched-line printing (we only care

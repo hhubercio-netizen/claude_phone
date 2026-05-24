@@ -187,7 +187,13 @@ impl Session {
     }
 }
 
-fn short_id() -> String {
+/// 64-bit random identifier formatted as 16 lowercase hex chars. Used for
+/// `session.id` and — via TM-AUTH.7 — as the per-connection `conn_id`
+/// correlator stamped on auth-failure log lines. The shape is deliberately
+/// short (16 hex) so it fits cleanly into a single log field but carries
+/// enough entropy that an operator grepping a 5-minute window will not see
+/// collisions in practice. Not secret; safe to log.
+pub(crate) fn short_id() -> String {
     use rand::Rng;
     let n: u64 = rand::thread_rng().gen();
     format!("{n:016x}")

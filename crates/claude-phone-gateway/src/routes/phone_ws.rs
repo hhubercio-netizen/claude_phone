@@ -17,7 +17,7 @@ use claude_phone_shared::SessionToken;
 use crate::rate_limit::{
     ConnRateLimiter, PHONE_TO_GW_MSG_PER_SEC, PONG_DEADLINE, SINK_SEND_TIMEOUT,
 };
-use crate::session::{Frame, SessionRegistry};
+use crate::session::{short_id, Frame, SessionRegistry};
 
 #[derive(Clone)]
 pub struct PhoneWsState {
@@ -46,6 +46,11 @@ pub async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<PhoneWsState>,
 ) -> Response {
+    // TM-AUTH.7 — per-connection-attempt correlation ID. See wrapper_ws for
+    // the full rationale. The conn_id rides every auth-failure log line on
+    // this attempt so an operator can grep one ID across log destinations.
+    let conn_id = short_id();
+
     // TM-WS.11: strict 43-char length check rejects malformed token shapes
     // before allocating the WebSocket upgrade. The previous 8..=64 band let
     // off-shape strings reach SessionToken::parse() unnecessarily.
@@ -54,6 +59,18 @@ pub async fn handler(
     // NUL, BEL, ESC, DEL, slash, backslash, whitespace, high-bit bytes — is
     // rejected and never reaches the WebSocket attach.
     if token_str.len() != SessionToken::LEN {
+        // TM-AUTH.7 — `token_str` is NEVER threaded into the log. Even a
+        // malformed candidate could be a near-miss of a real token; a
+        // shoulder-surfer who glimpsed the first few chars would otherwise
+        // get exactly the confirmation they need from our log.
+        tracing::warn!(
+            event = "auth_failure",
+            conn_id = %conn_id,
+            peer_ip = %peer.ip(),
+            reason = "bad_token_format",
+            route = "phone_ws",
+            "TM-AUTH.7 auth failure"
+        );
         return StatusCode::BAD_REQUEST.into_response();
     }
 
@@ -68,13 +85,24 @@ pub async fn handler(
         let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
         match origin {
             Some(o) if o == expected => {}
-            _ => return StatusCode::FORBIDDEN.into_response(),
+            _ => {
+                // TM-AUTH.7
+                tracing::warn!(
+                    event = "auth_failure",
+                    conn_id = %conn_id,
+                    peer_ip = %peer.ip(),
+                    reason = "forbidden_origin",
+                    route = "phone_ws",
+                    "TM-AUTH.7 auth failure"
+                );
+                return StatusCode::FORBIDDEN.into_response();
+            }
         }
     }
 
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, token_str, peer))
+        .on_upgrade(move |socket| handle_socket(socket, state, token_str, peer, conn_id))
 }
 
 async fn handle_socket(
@@ -82,10 +110,23 @@ async fn handle_socket(
     state: PhoneWsState,
     token_str: String,
     peer: SocketAddr,
+    conn_id: String,
 ) {
     let token = match SessionToken::parse(&token_str) {
         Ok(t) => t,
         Err(_) => {
+            // TM-AUTH.7 — defense-in-depth: the 43-char length gate in the
+            // handler already rejects most malformed shapes, but a 43-char
+            // string with a charset violation reaches here. `token_str` is
+            // NOT logged: it's the rejected secret candidate.
+            tracing::warn!(
+                event = "auth_failure",
+                conn_id = %conn_id,
+                peer_ip = %peer.ip(),
+                reason = "bad_token_format",
+                route = "phone_ws",
+                "TM-AUTH.7 auth failure"
+            );
             send_error(
                 &mut socket,
                 ErrorCode::InvalidToken,
@@ -99,6 +140,18 @@ async fn handle_socket(
     let handle = match state.registry.attach_phone(&token).await {
         Ok(h) => h,
         Err(_) => {
+            // TM-AUTH.7 — the well-formed token does not map to any
+            // registered session. Reason is intentionally coarse: callers
+            // cannot tell from this whether the session was never created,
+            // expired, or was just torn down — that asymmetry is the point.
+            tracing::warn!(
+                event = "auth_failure",
+                conn_id = %conn_id,
+                peer_ip = %peer.ip(),
+                reason = "session_not_found",
+                route = "phone_ws",
+                "TM-AUTH.7 auth failure"
+            );
             send_error(
                 &mut socket,
                 ErrorCode::InvalidToken,
@@ -122,11 +175,20 @@ async fn handle_socket(
     // succeeds, so a bouncing-bad-phone never produces a phantom
     // peer-connect/peer-disconnect pair in the wrapper's log.
     if let Err(why) = recv_phone_hello(&mut socket, &token).await {
+        // TM-AUTH.7 — canonical auth-failure shape. The `reason` here is one
+        // of the &'static str values returned by `recv_phone_hello`: each is
+        // a stable taxonomy token (no token bytes, no api_key bytes). The
+        // `session_id` field is the gateway's own id (not a secret), kept
+        // for cross-correlation with the wrapper-side "wrapper attached"
+        // log emitted when the same session was registered.
         tracing::warn!(
+            event = "auth_failure",
+            conn_id = %conn_id,
             session_id = %session_id,
-            peer = %peer,
+            peer_ip = %peer.ip(),
             reason = why,
-            "TM-WS phone_hello rejected — closing"
+            route = "phone_ws",
+            "TM-AUTH.7 auth failure (phone_hello)"
         );
         send_error(&mut socket, ErrorCode::ProtocolViolation, why.into()).await;
         // Cleanup attach without notifying wrapper. We never sent peer_up,

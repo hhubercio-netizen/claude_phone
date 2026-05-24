@@ -15,7 +15,7 @@ use crate::auth::verify_api_key;
 use crate::rate_limit::{
     AuthRateLimiter, ConnRateLimiter, GW_TO_PHONE_MSG_PER_SEC, PONG_DEADLINE, SINK_SEND_TIMEOUT,
 };
-use crate::session::{Frame, SessionRegistry};
+use crate::session::{short_id, Frame, SessionRegistry};
 
 #[derive(Clone)]
 pub struct WrapperWsState {
@@ -48,16 +48,42 @@ pub async fn handler(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     State(state): State<WrapperWsState>,
 ) -> Response {
+    // TM-AUTH.7 — per-connection-attempt correlation ID. Generated BEFORE
+    // any auth check so every auth-failure log line on this attempt — even
+    // the ones below that return immediately without upgrading — carries
+    // the same conn_id. Lets an operator grep one ID across the gateway
+    // log, fail2ban log, and reverse-proxy access log to reconstruct the
+    // attempt timeline without resorting to ip+timestamp heuristics.
+    let conn_id = short_id();
+
     // TM-RATE.2 — short-circuit upgrade for IPs that have tripped the
     // auth-failure lockout. 429 communicates "try again later" without
     // revealing whether the API key would otherwise have been valid.
     if state.auth_rate_limiter.is_locked(peer.ip()) {
+        // TM-AUTH.7
+        tracing::warn!(
+            event = "auth_failure",
+            conn_id = %conn_id,
+            peer_ip = %peer.ip(),
+            reason = "rate_limited",
+            route = "wrapper_ws",
+            "TM-AUTH.7 auth failure"
+        );
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
 
     if let Some(expected) = state.public_origin.as_deref() {
         if let Some(origin) = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok()) {
             if origin != expected {
+                // TM-AUTH.7
+                tracing::warn!(
+                    event = "auth_failure",
+                    conn_id = %conn_id,
+                    peer_ip = %peer.ip(),
+                    reason = "forbidden_origin",
+                    route = "wrapper_ws",
+                    "TM-AUTH.7 auth failure"
+                );
                 return StatusCode::FORBIDDEN.into_response();
             }
         }
@@ -65,10 +91,15 @@ pub async fn handler(
 
     ws.max_message_size(MAX_WS_MESSAGE_BYTES)
         .max_frame_size(MAX_WS_MESSAGE_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state, peer))
+        .on_upgrade(move |socket| handle_socket(socket, state, peer, conn_id))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: SocketAddr) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    state: WrapperWsState,
+    peer: SocketAddr,
+    conn_id: String,
+) {
     let hello = match recv_hello(&mut socket).await {
         Some(h) => h,
         None => return,
@@ -90,10 +121,21 @@ async fn handle_socket(mut socket: WebSocket, state: WrapperWsState, peer: Socke
     if !verify_api_key(&api_key, &state.allowed_keys) {
         // TM-RATE.2 — record the failure BEFORE responding so a brute-forcer
         // hitting in rapid succession ratchets the counter on every miss.
-        // The 4.2 sub-spec also emits a structured auth-failure log; the
-        // counter side-effect lives here, the log line is upstream — no
-        // duplication.
         state.auth_rate_limiter.record_failure(peer.ip());
+        // TM-AUTH.7 — structured auth-failure log. `api_key` is intentionally
+        // NEVER threaded into this log: `verify_api_key` already returned
+        // false, and even a 4-char prefix would let a brute-forcer correlate
+        // attempts. The fixed `reason="invalid_api_key"` token plus the
+        // conn_id correlator is enough for ops to grep, and `peer_ip` lets
+        // fail2ban downstream pick up the offending source.
+        tracing::warn!(
+            event = "auth_failure",
+            conn_id = %conn_id,
+            peer_ip = %peer.ip(),
+            reason = "invalid_api_key",
+            route = "wrapper_ws",
+            "TM-AUTH.7 auth failure"
+        );
         send_error(
             &mut socket,
             ErrorCode::InvalidApiKey,

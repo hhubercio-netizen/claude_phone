@@ -123,9 +123,9 @@ grep -qF 'install_fail2ban' deploy/scripts/deploy.sh \
     || { echo "MISSING install_fail2ban wiring in deploy.sh — TM-INFRA.4"; exit 1; }
 # Pin the failregex line so a drift that drops the ip capture or the
 # event tag fails the gate before fail2ban-regex would even run.
-grep -qF '"event":"auth_failure".*"ip":"<HOST>"' \
+grep -qF '"event":"auth_failure".*"peer_ip":"<HOST>"' \
     deploy/fail2ban/filter.d/claude-phone.conf \
-    || { echo "MISSING auth_failure+ip failregex pattern — TM-INFRA.4"; exit 1; }
+    || { echo "MISSING auth_failure+peer_ip failregex pattern — TM-INFRA.4"; exit 1; }
 if command -v fail2ban-regex >/dev/null 2>&1; then
     ./scripts/fail2ban_filter_test.sh
 else

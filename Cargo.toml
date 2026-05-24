@@ -78,7 +78,11 @@ anyhow = "1"
 tokio-test = "0.4"
 portpicker = "0.1"
 tempfile = "3"
-tracing-test = "0.2"
+# `no-env-filter` is required for integration tests (in `tests/`): without
+# it, tracing-test's subscriber drops events from the gateway crate because
+# the integration-test binary is a different crate name. See the
+# tracing-test 0.2 docs, last paragraph of the crate-level rationale.
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
 # TM-TEST.2 — property-based tests over the wire protocol and secret-token
 # parsers. Pinned to a single workspace version so the proptest binary,
 # regression-corpus format, and proc-macro stay in lockstep across crates.
