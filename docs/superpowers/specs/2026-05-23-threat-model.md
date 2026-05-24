@@ -651,7 +651,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 
 | ID         | Mitigation                                                                                  | Status |
 |------------|---------------------------------------------------------------------------------------------|--------|
-| TM-SECRET.1 | `/etc/claude-phone/gateway.toml` mode 0640 root:claude-phone                                | TODO   |
+| TM-SECRET.1 | `/etc/claude-phone/gateway.toml` mode 0640 root:claude-phone                                | GREEN (`GatewayConfig::load` checks `mode & 0o027 != 0` and `bail!`s with a `chmod 640 + chown root:claude-phone` hint that names the catalog row; mirrors TM-SECRET.10. Unix-only, Windows relies on user-profile ACL. Forward-looking `tm_secret_1` test module in `config_test.rs` exercises 0644/0660/0641/0604 reject and 0640/0600/0440 accept.) |
 | TM-SECRET.2 | `Zeroizing<String>` inner type for SessionToken / ApiKey                                    | GREEN  |
 | TM-SECRET.3 | Manual Debug returning `"(***)"` on secret newtypes                                         | GREEN  |
 | TM-SECRET.4 | Hidden server header `Server: claude-phone`                                                 | GREEN  |

@@ -134,6 +134,33 @@ impl GatewayConfig {
     }
 
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
+        // TM-SECRET.1: fail-loud on a gateway config that any non-owner /
+        // non-group reader could open. The file carries every accepted
+        // `ApiKey` for the deployment — the shared secret with every wrapper
+        // — so on a multi-tenant host (VPS with a second account, shared
+        // dev box, leaked CI runner) a world- or group-writable mode would
+        // hand impersonation to anyone who can read it. The target deploy
+        // mode is `0640 root:claude-phone`; the mask therefore rejects any
+        // world bit AND group-write, while still permitting the service
+        // account group to read. Stricter `0600` and `0400` also pass — a
+        // single-user host that runs the gateway as a non-root user can
+        // tighten further without breaking this gate. Windows relies on
+        // the default profile ACL and skips the check (mirrors the wrapper
+        // pattern at `claude-phone-wrapper/src/config.rs::load`).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(path)?;
+            let mode = meta.permissions().mode() & 0o777;
+            if mode & 0o027 != 0 {
+                anyhow::bail!(
+                    "gateway config {path:?} has permissive mode {mode:#o}; \
+                     contains api_keys, must be at most 0640 with no \
+                     world bits and no group-write (TM-SECRET.1). \
+                     Run: chmod 640 {path:?} && chown root:claude-phone {path:?}"
+                );
+            }
+        }
         let raw = std::fs::read_to_string(path)?;
         let cfg: Self = toml::from_str(&raw)?;
         cfg.validate()?;
