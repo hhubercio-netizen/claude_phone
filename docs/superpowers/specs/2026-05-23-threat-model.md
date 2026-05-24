@@ -720,10 +720,10 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-WS.4    | `max_message_size = 64 KB`                                                                   | GREEN   |
 | TM-WS.5    | `max_frame_size = 64 KB`                                                                     | GREEN   |
 | TM-WS.6    | 30 s server-initiated Ping keepalive                                                         | GREEN   |
-| TM-WS.7    | 60 s no-pong → drop socket (post-hello idle)                                                 | TODO    |
+| TM-WS.7    | 60 s no-pong → drop socket (post-hello idle)                                                 | GREEN (deduplicates [[TM-RATE.7]] — the post-hello watchdog tracks `last_pong_ms` and cancels via `session.cancel.cancel()` after `PONG_DEADLINE` (90 s) in both `wrapper_ws.rs` and `phone_ws.rs`. Final deadline relaxed from the threat-model's first-pass 60 s to 90 s to absorb mobile-network jitter without false-killing healthy sessions; `tests/rate_limit.rs::pong_deadline_is_bounded_and_reasonable` pins the constant) |
 | TM-WS.8    | WS compression OFF (`permessage-deflate` not negotiated)                                     | GREEN (tests/websocket.rs raw-TCP upgrade asserts server never echoes `permessage-deflate` on either route) |
 | TM-WS.9    | `public_origin` fail-loud at gateway start if not configured in production                   | GREEN (config.rs validate(), Environment::Production requires public_origin) |
-| TM-WS.10   | HTTP upgrade-phase timeout (axum/hyper) — explicit configured limit                          | TODO    |
+| TM-WS.10   | HTTP upgrade-phase timeout (axum/hyper) — explicit configured limit                          | GREEN (deduplicates [[TM-RATE.9]] — `serve::run` builds the listener with `hyper_util::server::conn::auto` and `http1.header_read_timeout(10 s)`, replacing `axum::serve` which doesn't surface the knob; `tests/rate_limit.rs::slow_loris_header_read_timeout` proves the slow-loris client gets dropped before completing headers) |
 | TM-WS.11   | Strict token length on `/api/phone/:token` path before allocation                            | GREEN   |
 | TM-WS.12   | WS subprotocol negotiation — strict match or unset                                           | GREEN (tests/websocket.rs raw-TCP upgrade asserts server never echoes `Sec-WebSocket-Protocol` on either route) |
 
@@ -735,7 +735,7 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-CODE.2  | `unsafe` block count = 0 in workspace                                                       | GREEN  |
 | TM-CODE.3  | `panic!` / `unwrap` / `expect` audit in hot paths (tests-only allowed)                       | GREEN  |
 | TM-CODE.4  | TOCTOU sweep in `session/registry.rs` (insert/check/use sequences)                          | GREEN  |
-| TM-CODE.5  | Channel back-pressure verify: no unbounded channels in hot paths; bounded with timeout      | TODO   |
+| TM-CODE.5  | Channel back-pressure verify: no unbounded channels in hot paths; bounded with timeout      | GREEN (`scripts/check_unbounded_channels.sh` greps every `crates/*/src/**/*.rs` for `unbounded_channel` / `unbounded_send` outside `#[cfg(test)]` blocks and fails the build on any production hit; wired as a dedicated CI step `TM-CODE.5 — unbounded-channel gate` in `.github/workflows/ci.yml`. Sink writes use `SINK_SEND_TIMEOUT = 5 s` over bounded mpsc(256) channels — see [[TM-RATE.6]]) |
 | TM-CODE.6  | Integer overflow: bounds on `session_idle_timeout_secs`, `max_sessions`; `cols`/`rows` u16 OK | GREEN |
 | TM-CODE.7  | Workspace `cargo fmt --check` clean                                                          | GREEN  |
 
