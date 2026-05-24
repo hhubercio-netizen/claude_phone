@@ -39,6 +39,16 @@ const MAX_WS_MESSAGE_BYTES: usize = 64 * 1024;
 /// and squat without identifying itself, costing a registry slot.
 const PHONE_HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// TM-AUTH.7 — coarse wire body sent to phone_ws peers when
+/// `recv_phone_hello` fails. The granular `&'static str` reason
+/// returned by `recv_phone_hello` lives in the structured auth-failure
+/// log (the `reason=...` field) only — it is NOT sent verbatim to the
+/// peer. Distinguishing "phone_hello timeout" from "phone_hello not
+/// valid JSON" from "phone_hello token mismatch" on the wire would let
+/// a token holder fingerprint the post-attach state machine by probing
+/// each failure mode and reading the response body.
+const PHONE_HELLO_FAILURE_WIRE_BODY: &str = "phone_hello rejected";
+
 pub async fn handler(
     ws: WebSocketUpgrade,
     Path(token_str): Path<String>,
@@ -190,7 +200,15 @@ async fn handle_socket(
             route = "phone_ws",
             "TM-AUTH.7 auth failure (phone_hello)"
         );
-        send_error(&mut socket, ErrorCode::ProtocolViolation, why.into()).await;
+        // TM-AUTH.7 — log gets `why` (granular taxonomy token, used by ops
+        // for cross-log correlation); peer gets the fixed coarse body so the
+        // post-attach state machine cannot be fingerprinted off the wire.
+        send_error(
+            &mut socket,
+            ErrorCode::ProtocolViolation,
+            PHONE_HELLO_FAILURE_WIRE_BODY.into(),
+        )
+        .await;
         // Cleanup attach without notifying wrapper. We never sent peer_up,
         // so we owe no peer_down.
         let mut slot = handle.session.to_phone.lock().await;
@@ -428,10 +446,15 @@ async fn send_error(socket: &mut WebSocket, code: ErrorCode, message: String) {
 /// (the body is currently unused beyond presence + token-equality, but the
 /// signature is shaped so callers can later thread `cols`/`rows` into a
 /// Resize forwarded to the wrapper). On any failure returns `Err(&'static
-/// str)` with a stable reason string — fed to both tracing and the
-/// ProtocolViolation message body. Reasons are deliberately coarse so they
-/// don't act as a probe oracle ("you sent text but wrong shape" vs "wrong
-/// token" leaks structural info).
+/// str)` with a stable taxonomy token.
+///
+/// TM-AUTH.7 wire/log split: the returned reason rides the structured
+/// auth-failure log (`reason=...` field) so an operator can disambiguate
+/// failure modes when correlating across log destinations. It is NOT
+/// forwarded to the peer — the caller bridges every failure into the
+/// fixed `PHONE_HELLO_FAILURE_WIRE_BODY` so a token holder cannot
+/// fingerprint the post-attach state machine by probing each branch and
+/// reading distinct error strings back.
 async fn recv_phone_hello(
     socket: &mut WebSocket,
     url_token: &SessionToken,

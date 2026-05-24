@@ -31,7 +31,7 @@ use claude_phone_gateway::{
     http::build_app,
 };
 use claude_phone_shared::{
-    protocol::{ControlMessage, WrapperHello},
+    protocol::{ControlMessage, ErrorCode, PhoneHello, WrapperHello},
     ApiKey, SessionToken,
 };
 use futures::{SinkExt, StreamExt};
@@ -223,4 +223,178 @@ async fn auth_failure_conn_id_is_16_lowercase_hex_chars() {
             Err("TM-AUTH.7: no log line contains conn_id=<16 lowercase hex>".into())
         }
     });
+}
+
+// TM-AUTH.7 — wire-side coarseness invariant for `recv_phone_hello`.
+//
+// The doc comment on `recv_phone_hello` claims its reasons are "deliberately
+// coarse so they don't act as a probe oracle." That claim is only half true:
+// the structured log (TM-AUTH.7 `reason=...` field) IS coarse, but the
+// `&'static str` reason previously flowed verbatim into `ErrorMessage.message`
+// sent to the peer, distinguishing 7 distinct post-attach failure states
+// ("phone_hello timeout" vs "phone_hello not valid JSON" vs "phone_hello
+// token mismatch" etc.). A token holder probing the gateway could fingerprint
+// the post-attach state machine off those strings.
+//
+// These two tests pin the COARSE wire body in place: granular reasons live
+// in the log; the peer always sees `"phone_hello rejected"`. A future
+// refactor that re-threads the granular `why` back into the `send_error`
+// argument (a one-identifier swap) trips here in CI. Two failure modes are
+// pinned — bad JSON (pre-typed-parse branch) and token mismatch (post-
+// typed-parse branch) — so the coarsening cannot be silently relaxed for
+// "just the cosmetic-looking" paths.
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn phone_hello_bad_json_wire_body_is_coarse_with_granular_log() {
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let port = spawn_test_gateway(api_key.clone()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Register a wrapper for `token` so the phone attempt actually reaches
+    // `recv_phone_hello`. Without this the phone attempt would short-circuit
+    // at `session_not_found` and the test would pass for the wrong reason.
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    wrapper_ws
+        .send(Message::Text(
+            serde_json::to_string(&ControlMessage::WrapperHello(WrapperHello {
+                api_key,
+                token: token.clone(),
+                cols: 80,
+                rows: 24,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    let (mut phone_ws, _) = tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{port}/api/phone/{}",
+        token.as_str()
+    ))
+    .await
+    .expect("phone connect");
+
+    // Malformed JSON exercises the `serde_json::from_str(&t).map_err(...)`
+    // branch of `recv_phone_hello`.
+    phone_ws
+        .send(Message::Text("not valid json {{{".into()))
+        .await
+        .unwrap();
+
+    let resp = phone_ws.next().await.unwrap().unwrap();
+    let body = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected text Error frame, got {other:?}"),
+    };
+    let parsed: ControlMessage = serde_json::from_str(&body).expect("error parses");
+    let ControlMessage::Error(err) = parsed else {
+        panic!("expected Error variant, got {parsed:?}");
+    };
+
+    // TM-AUTH.7 — wire body MUST be the fixed coarse string, NOT one of the
+    // granular `&'static str` reasons. If this assertion fires with
+    // "phone_hello not valid JSON" or similar, a refactor has re-opened the
+    // post-attach probe-oracle path.
+    assert_eq!(
+        err.message, "phone_hello rejected",
+        "TM-AUTH.7: wire body must be coarse — granular reason leaked to peer"
+    );
+    assert_eq!(err.code, ErrorCode::ProtocolViolation);
+
+    // TM-AUTH.7 — granular reason MUST still reach the structured log so
+    // operators can disambiguate failure modes. Losing this side of the
+    // contract turns every post-attach failure into "auth_failure reason=
+    // rejected" with no diagnostic value.
+    assert!(
+        logs_contain(r#"reason="phone_hello not valid JSON""#),
+        "TM-AUTH.7: granular reason missing from structured log"
+    );
+}
+
+#[tokio::test]
+#[tracing_test::traced_test]
+async fn phone_hello_token_mismatch_wire_body_is_coarse_with_granular_log() {
+    let api_key = ApiKey::generate();
+    let token = SessionToken::generate();
+    let port = spawn_test_gateway(api_key.clone()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let (mut wrapper_ws, _) =
+        tokio_tungstenite::connect_async(format!("ws://127.0.0.1:{port}/api/wrapper"))
+            .await
+            .expect("wrapper connect");
+    wrapper_ws
+        .send(Message::Text(
+            serde_json::to_string(&ControlMessage::WrapperHello(WrapperHello {
+                api_key,
+                token: token.clone(),
+                cols: 80,
+                rows: 24,
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let _ = wrapper_ws.next().await.unwrap().unwrap();
+
+    let (mut phone_ws, _) = tokio_tungstenite::connect_async(format!(
+        "ws://127.0.0.1:{port}/api/phone/{}",
+        token.as_str()
+    ))
+    .await
+    .expect("phone connect");
+
+    // Well-formed phone_hello whose inner token does NOT match the URL token
+    // exercises the `if !token.ct_eq(url_token)` branch — the deepest
+    // failure path in `recv_phone_hello`.
+    let mismatch_token = SessionToken::generate();
+    let mismatch_token_str = mismatch_token.as_str().to_string();
+    let hello = ControlMessage::PhoneHello(PhoneHello {
+        token: mismatch_token,
+        cols: 80,
+        rows: 24,
+        user_agent: None,
+    });
+    phone_ws
+        .send(Message::Text(serde_json::to_string(&hello).unwrap()))
+        .await
+        .unwrap();
+
+    let resp = phone_ws.next().await.unwrap().unwrap();
+    let body = match resp {
+        Message::Text(t) => t,
+        other => panic!("expected text Error frame, got {other:?}"),
+    };
+    let parsed: ControlMessage = serde_json::from_str(&body).expect("error parses");
+    let ControlMessage::Error(err) = parsed else {
+        panic!("expected Error variant, got {parsed:?}");
+    };
+
+    assert_eq!(
+        err.message, "phone_hello rejected",
+        "TM-AUTH.7: token-mismatch wire body must be coarse"
+    );
+    assert_eq!(err.code, ErrorCode::ProtocolViolation);
+    assert!(
+        logs_contain(r#"reason="phone_hello token mismatch""#),
+        "TM-AUTH.7: token-mismatch reason missing from structured log"
+    );
+
+    // Neither the URL token nor the rejected hello-body token may appear in
+    // the log. Both are candidate secrets and a log-read attacker who finds
+    // them gets the rejected key for free.
+    assert!(
+        !logs_contain(token.as_str()),
+        "TM-AUTH.7: URL token leaked into log"
+    );
+    assert!(
+        !logs_contain(&mismatch_token_str),
+        "TM-AUTH.7: rejected hello-body token leaked into log"
+    );
 }
