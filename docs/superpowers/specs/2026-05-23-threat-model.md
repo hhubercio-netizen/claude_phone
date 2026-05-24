@@ -615,8 +615,8 @@ these in code comments (`// TM-CAT.N: <reason>`) and in commit messages.
 | TM-TLS.3   | HSTS preload registry submission (manual ops, after 30 d clean)                             | DEFER  |
 | TM-TLS.4   | CT monitoring via crt.sh alerts on `claude-phone.pl`                                        | GREEN (`.github/workflows/ct-monitor.yml` + `scripts/ct_monitor.sh`; daily 06:00 UTC, opens/updates tracking issue on novel serial; baseline cached across runs) |
 | TM-TLS.5   | Referrer-Policy `no-referrer`                                                               | GREEN  |
-| TM-TLS.6   | OCSP stapling (Caddy default on)                                                            | VERIFY |
-| TM-TLS.7   | TLS scan (testssl.sh) — all A grades                                                        | VERIFY |
+| TM-TLS.6   | OCSP stapling (Caddy default on)                                                            | GREEN (`deploy/scripts/post_deploy_verify.sh` openssl s_client -status; invoked from `deploy.sh` with STRICT=1) |
+| TM-TLS.7   | TLS scan (testssl.sh) — all A grades                                                        | GREEN (`deploy/scripts/post_deploy_verify.sh` testssl.sh --jsonfile; fails on HIGH/CRITICAL under STRICT=1) |
 | TM-TLS.8   | Cloudflare TLS mode Full (strict)                                                           | VERIFY |
 | TM-TLS.9   | WS over wss only, never ws (Origin + scheme check)                                          | GREEN  |
 

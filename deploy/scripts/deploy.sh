@@ -90,3 +90,10 @@ install_caddy_note
 start_services
 
 systemctl status --no-pager claude-phone-gateway || true
+
+# TM-TLS.6 / TM-TLS.7 — verify edge TLS posture (OCSP staple + testssl)
+# before declaring the deploy complete. STRICT=1 means any HIGH/CRITICAL
+# finding or missing staple aborts the deploy script. The presence and
+# STRICT invocation are asserted by scripts/security_invariants.sh.
+echo "[deploy] post-deploy TLS verify"
+STRICT=1 bash "$REPO_DIR/deploy/scripts/post_deploy_verify.sh"

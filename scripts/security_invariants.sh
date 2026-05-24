@@ -24,4 +24,13 @@ echo "[security_invariants] CT monitor cron presence ..."
 grep -qF "cron: '0 6 * * *'" .github/workflows/ct-monitor.yml \
     || { echo "MISSING ct-monitor cron '0 6 * * *' — TM-TLS.4 regressed"; exit 1; }
 
+# TM-TLS.6 / TM-TLS.7 — post-deploy verify must exist and be invoked by
+# deploy.sh in STRICT mode. A refactor that "forgets" to call this would
+# silently ship a TLS regression past the deploy gate.
+echo "[security_invariants] post-deploy TLS verify wiring ..."
+[ -x deploy/scripts/post_deploy_verify.sh ] \
+    || { echo "MISSING executable deploy/scripts/post_deploy_verify.sh — TM-TLS.6/.7"; exit 1; }
+grep -qF 'STRICT=1 bash "$REPO_DIR/deploy/scripts/post_deploy_verify.sh"' deploy/scripts/deploy.sh \
+    || { echo "MISSING STRICT=1 invocation of post_deploy_verify.sh in deploy.sh — TM-TLS.6/.7"; exit 1; }
+
 echo "[security_invariants] OK"
