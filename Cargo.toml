@@ -57,7 +57,7 @@ serde_json = "1"
 toml = "0.8"
 
 # PTY
-portable-pty = "0.8"
+portable-pty = "0.9"
 
 # crypto / random
 rand = "0.8"
