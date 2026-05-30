@@ -63,7 +63,7 @@ jobs:
 
       - name: Open or update tracking issue
         if: steps.ct.outputs.novel == '1'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           CT_LOG_PATH: ct_monitor.log
         with:
